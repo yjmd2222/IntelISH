@@ -560,12 +560,14 @@ void IntelISH::receiveHIDMessage(const UInt8 *bytes, unsigned size) {
     } else if ((stage == HIDDescriptorWait && command == 0) ||
                (stage == ReportDescriptorWait && command == 1)) {
         if (!length) { fail("empty HID descriptor"); return; }
+#if DEBUG
         char name[40]; snprintf(name, sizeof(name), "%s-%u",
             command == 0 ? "HIDDescriptor" : "ReportDescriptor", bytes[1]);
         if (!setProperty(name, const_cast<UInt8 *>(payload), length)) {
             fail("cannot retain HID descriptor"); return;
         }
         dump(name, payload, length);
+#endif
         if (command == 1 && !alsFound) {
             ISHALS::Layout layout;
             if (ISHALS::parse(payload, length, layout)) {

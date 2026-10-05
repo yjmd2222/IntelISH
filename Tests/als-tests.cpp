@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-#include "ALSReport.hpp"
+#include "../ALSReport.hpp"
 #include <cassert>
 #include <cstdio>
 #include <vector>

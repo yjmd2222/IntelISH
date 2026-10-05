@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-#include "Protocol.hpp"
+#include "../Protocol.hpp"
 #include <cassert>
 #include <cstdio>
 #include <cstring>
