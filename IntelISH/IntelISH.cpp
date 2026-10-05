@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
+// Copyright © 2026 yjmd2222. All rights reserved.
 // macOS port groundwork for Intel ISH. Register definitions follow Intel's
 // drivers/hid/intel-ish-hid/ipc/{hw-ish-regs.h,hw-ish.h,pci-ish.c}.
 #include <IOKit/IOService.h>

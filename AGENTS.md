@@ -52,10 +52,10 @@ Motion shares transport; cameras require a separate IPU3 port.
 Protocol/ALS tests:
 
 ```sh
-clang++ -std=c++14 -Wall -Wextra -Werror -fsanitize=address,undefined Tests/protocol-tests.cpp -o /tmp/ish-protocol-tests
+clang++ -std=c++14 -Wall -Wextra -Werror -fsanitize=address,undefined tests/protocol-tests.cpp -o /tmp/ish-protocol-tests
 /tmp/ish-protocol-tests
-clang++ -std=c++14 -Wall -Wextra -Werror -fsanitize=address,undefined Tests/als-tests.cpp -o /tmp/ish-als-tests
-/tmp/ish-als-tests Tests/test-data/device0-20261005.bin
+clang++ -std=c++14 -Wall -Wextra -Werror -fsanitize=address,undefined tests/als-tests.cpp -o /tmp/ish-als-tests
+/tmp/ish-als-tests tests/test-data/device0-20261005.bin
 ```
 
 ## Power management (0.5.0)

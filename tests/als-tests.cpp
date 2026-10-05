@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
-#include "../ALSReport.hpp"
+// Copyright © 2026 yjmd2222. All rights reserved.
+#include "../IntelISH/ALSReport.hpp"
 #include <cassert>
 #include <cstdio>
 #include <vector>

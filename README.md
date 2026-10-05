@@ -22,7 +22,7 @@ xcodebuild -project IntelISH.xcodeproj -target IntelISH -configuration Debug bui
 
 Use `-configuration Release` for a release build. Outputs are in `build/Debug/` and `build/Release/`. Live HID descriptor properties and hex dumps are Debug-only; descriptor parsing remains enabled in both.
 
-Standalone tests and captured fixtures live in `Tests/` and are excluded from both kext builds.
+Sources and Info.plist live in `IntelISH/` (Acidanthera layout: project at the root, inner folder named after it). Standalone tests and captured fixtures live in `tests/` and are excluded from both kext builds.
 
  Load Lilu and VirtualSMC before IntelISH in OpenCore. Disable SMCLightSensor to avoid competing light keys; keep the workspace's original SSDT-ALS0.
 

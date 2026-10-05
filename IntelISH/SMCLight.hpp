@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0-only AND BSD-3-Clause
+// Copyright © 2026 yjmd2222. All rights reserved.
 // Light key format adapted from VirtualSMC SMCLightSensor (usrsse2, 2018).
 // VirtualSMC-derived portions: BSD-3-Clause; see VirtualSMC-LICENSE.txt.
 #pragma once
