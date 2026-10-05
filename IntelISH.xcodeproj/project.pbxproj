@@ -1,0 +1,30 @@
+// !$*UTF8*$!
+{
+ archiveVersion = 1;
+ classes = {};
+ objectVersion = 56;
+ objects = {
+  000000000000000000000001 = {isa = PBXProject; buildConfigurationList = 000000000000000000000010; compatibilityVersion = "Xcode 14.0"; mainGroup = 000000000000000000000002; productRefGroup = 000000000000000000000003; projectDirPath = ""; projectRoot = ""; targets = (000000000000000000000004); };
+  000000000000000000000002 = {isa = PBXGroup; children = (000000000000000000000005,000000000000000000000003); sourceTree = "<group>"; };
+  000000000000000000000003 = {isa = PBXGroup; children = (000000000000000000000006); name = Products; sourceTree = "<group>"; };
+  000000000000000000000004 = {isa = PBXNativeTarget; buildConfigurationList = 000000000000000000000011; buildPhases = (000000000000000000000007); buildRules = (); dependencies = (); name = IntelISH; productName = IntelISH; productReference = 000000000000000000000006; productType = "com.apple.product-type.kernel-extension"; };
+  000000000000000000000005 = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = IntelISH.cpp; sourceTree = "<group>"; };
+  000000000000000000000006 = {isa = PBXFileReference; explicitFileType = wrapper.kext; path = IntelISH.kext; sourceTree = BUILT_PRODUCTS_DIR; };
+  000000000000000000000007 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (000000000000000000000008); runOnlyForDeploymentPostprocessing = 0; };
+  000000000000000000000008 = {isa = PBXBuildFile; fileRef = 000000000000000000000005; };
+  000000000000000000000010 = {isa = XCConfigurationList; buildConfigurations = (000000000000000000000012); defaultConfigurationIsVisible = 0; defaultConfigurationName = Debug; };
+  000000000000000000000011 = {isa = XCConfigurationList; buildConfigurations = (000000000000000000000013); defaultConfigurationIsVisible = 0; defaultConfigurationName = Debug; };
+  000000000000000000000012 = {isa = XCBuildConfiguration; name = Debug; buildSettings = {ARCHS = x86_64; SDKROOT = macosx; CLANG_CXX_LANGUAGE_STANDARD = "gnu++14"; GCC_OPTIMIZATION_LEVEL = 0; GCC_TREAT_WARNINGS_AS_ERRORS = YES; CODE_SIGN_IDENTITY = "-"; }; };
+  000000000000000000000013 = {isa = XCBuildConfiguration; name = Debug; buildSettings = {
+    PRODUCT_NAME = IntelISH; PRODUCT_BUNDLE_IDENTIFIER = org.jinmo.IntelISH;
+    INFOPLIST_FILE = Info.plist; MACOSX_DEPLOYMENT_TARGET = 10.14;
+    MODULE_NAME = org.jinmo.IntelISH; MODULE_VERSION = 0.4.1;
+    MODULE_START = IntelISH_start; MODULE_STOP = IntelISH_stop;
+    KERNEL_EXTENSION_HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/../YogaSMC/MacKernelSDK/Headers";
+    KERNEL_FRAMEWORK_HEADERS = "$(PROJECT_DIR)/../YogaSMC/MacKernelSDK/Headers";
+    LIBRARY_SEARCH_PATHS = "$(PROJECT_DIR)/../YogaSMC/MacKernelSDK/Library/x86_64";
+    WRAPPER_EXTENSION = kext;
+  }; };
+ };
+ rootObject = 000000000000000000000001;
+}

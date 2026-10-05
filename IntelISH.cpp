@@ -1,0 +1,586 @@
+// SPDX-License-Identifier: GPL-2.0-only
+// macOS port groundwork for Intel ISH. Register definitions follow Intel's
+// drivers/hid/intel-ish-hid/ipc/{hw-ish-regs.h,hw-ish.h,pci-ish.c}.
+#include <IOKit/IOService.h>
+#include <IOKit/IOLib.h>
+#include <IOKit/pci/IOPCIDevice.h>
+#include <IOKit/IOTimerEventSource.h>
+#include <IOKit/IOInterruptEventSource.h>
+#include <libkern/OSByteOrder.h>
+#include "Protocol.hpp"
+#include "ALSReport.hpp"
+
+class IntelISH : public IOService {
+    OSDeclareDefaultStructors(IntelISH)
+    IOPCIDevice *pci {nullptr};
+    IOMemoryMap *mapping {nullptr};
+    IOWorkLoop *loop {nullptr};
+    IOTimerEventSource *timer {nullptr};
+    IOInterruptEventSource *interrupt {nullptr};
+    bool interruptAdded {false}, transportStarted {false};
+    UInt32 savedMask {0}, savedHost {0}, savedDMA {0};
+    enum Stage { ResetSend, ResetWait, ReadyWait, VersionWait, EnumWait,
+                 PropertiesWait, ConnectWait, HIDEnumWait, HIDDescriptorWait, ReportDescriptorWait, ALSFeatureGet, ALSFeatureSet, ALSFeatureVerify, ALSInputWait, Streaming, Complete, Failed };
+    Stage stage {ResetSend};
+    unsigned elapsed {0}, deadline {1000}, totalTicks {0};
+    unsigned client {0}, clientCount {0}, hidAddress {0};
+    UInt8 clientMap[32] {};
+    unsigned hidMaxMessage {0}, txCredits {0};
+    bool connected {false}, requestPending {false};
+    UInt8 pendingCommand {0}, pendingDevice {0};
+    unsigned deviceCount {0}, deviceIndex {0};
+    UInt8 deviceIDs[32] {};
+    ISHProtocol::Assembly assembly;
+    ISHALS::Layout als;
+    bool alsFound {false}, streamingStarted {false};
+    UInt8 alsDevice {0}, feature[512] {}, originalFeature[512] {};
+    UInt8 requestData[512] {};
+    unsigned requestSize {0}, lightSamples {0};
+    void beginALS();
+    void requestReport(UInt8 command, Stage next, const char *name);
+    bool lightInput(UInt8 device, const UInt8 *bytes, unsigned size);
+    void sendISHTP(UInt8 firmware, UInt8 host, const UInt8 *bytes, unsigned size);
+    void clientControl(UInt8 command);
+    void requestHID(UInt8 command, UInt8 device, Stage next, const char *name);
+    void sendHIDRequest();
+    void receiveHID(const UInt8 *bytes, unsigned size);
+    void receiveHIDMessage(const UInt8 *bytes, unsigned size);
+    void dump(const char *label, const UInt8 *bytes, unsigned size);
+    struct Packet { UInt32 doorbell; UInt8 bytes[128]; };
+    Packet queue[8] {};
+    unsigned head {0}, queued {0};
+    unsigned samples {0};
+    UInt32 read(UInt32 offset);
+    void write(UInt32 offset, UInt32 value);
+    void advance(Stage next, const char *name, unsigned timeout = 500);
+    void fail(const char *reason);
+    bool queuePacket(unsigned protocol, unsigned command, const UInt8 *bytes, unsigned size);
+    void hbm(UInt8 command, UInt8 address = 0);
+    void nextClient();
+    void receive(UInt32 doorbell, const UInt8 *bytes, unsigned size);
+    void pump();
+    static void irq(OSObject *owner, IOInterruptEventSource *, int);
+    UInt16 originalCommand {0};
+    bool commandSaved {false};
+    bool timerAdded {false};
+    void snapshot();
+    void cleanup();
+    static void tick(OSObject *owner, IOTimerEventSource *source);
+public:
+    bool start(IOService *provider) override;
+    void stop(IOService *provider) override;
+};
+OSDefineMetaClassAndStructors(IntelISH, IOService)
+
+bool IntelISH::start(IOService *provider) {
+    if (!IOService::start(provider)) return false;
+    pci = OSDynamicCast(IOPCIDevice, provider);
+    if (!pci || pci->configRead16(kIOPCIConfigVendorID) != 0x8086 ||
+        pci->configRead16(kIOPCIConfigDeviceID) != 0x9d35) return false;
+    originalCommand = pci->configRead16(kIOPCIConfigCommand);
+    commandSaved = true;
+    // BAR address is supplied by PCI; never guess a physical address.
+    pci->setMemoryEnable(true);
+    mapping = pci->mapDeviceMemoryWithRegister(kIOPCIConfigBaseAddress0);
+    if (!mapping || mapping->getLength() < 0x400) {
+        IOLog("IntelISH: BAR0 unavailable or too small\n");
+        cleanup(); return false;
+    }
+    loop = IOWorkLoop::workLoop();
+    timer = IOTimerEventSource::timerEventSource(this, tick);
+    if (!loop || !timer || loop->addEventSource(timer) != kIOReturnSuccess) {
+        cleanup(); return false;
+    }
+    timerAdded = true;
+    interrupt = IOInterruptEventSource::interruptEventSource(this, irq, pci);
+    if (!interrupt || loop->addEventSource(interrupt) != kIOReturnSuccess) {
+        IOLog("IntelISH: cannot install interrupt source\n");
+        cleanup(); return false;
+    }
+    interruptAdded = true;
+    savedMask = read(0x08); savedHost = read(0x38); savedDMA = read(0x368);
+    setProperty("PortStage", "ALS feature control and illuminance reports");
+    setProperty("BAR0Physical", mapping->getPhysicalAddress(), 64);
+    IOLog("IntelISH: 8086:9d35 revision=%02x BAR0=%llx length=%llu PCI command=%04x\n",
+          pci->configRead8(kIOPCIConfigRevisionID),
+          (unsigned long long)mapping->getPhysicalAddress(),
+          (unsigned long long)mapping->getLength(), originalCommand);
+    snapshot();
+    transportStarted = true;
+    pci->setBusMasterEnable(true);
+    // Linux Sunrise Point sequence: host-ready, interrupt enable, DMA wake gate.
+    // HBM 1.0 uses mailbox messages; no host DMA buffers are allocated/offered.
+    write(0x38, savedHost | 0x80);
+    write(0x08, (savedMask | 1) & ~0x100U);
+    write(0x368, 1);
+    write(0x54, 0);
+    advance(ResetSend, "reset-send", 1000);
+    UInt8 reset[4] = {1, 0, 0, 0};
+    queuePacket(3, 3, reset, sizeof(reset));
+    interrupt->enable();
+    timer->setTimeoutMS(10);
+    registerService();
+    return true;
+}
+
+void IntelISH::snapshot() {
+    // These status/doorbell registers are read without acknowledging messages.
+    static const UInt32 offsets[] = {0x08, 0x0c, 0x34, 0x38, 0x48, 0x54, 0x368};
+    static const char *names[] = {"InterruptMask", "InterruptStatus", "FirmwareStatus",
+        "HostCommunication", "HostToISH", "ISHToHost", "DMAControl"};
+    UInt32 values[7];
+    const void *base = reinterpret_cast<const void *>(mapping->getVirtualAddress());
+    for (unsigned i = 0; i < 7; i++) {
+        values[i] = OSReadLittleInt32(base, offsets[i]);
+        setProperty(names[i], values[i], 32);
+    }
+    setProperty("FirmwareState", (values[2] >> 12) & 0xf, 8);
+    setProperty("SampleCount", ++samples, 32);
+    IOLog("IntelISH: sample=%u PIMR=%08x PISR=%08x FWSTS=%08x state=%u HOSTCOMM=%08x H2I=%08x I2H=%08x RMP2=%08x\n",
+        samples, values[0], values[1], values[2], (values[2] >> 12) & 0xf,
+        values[3], values[4], values[5], values[6]);
+}
+
+UInt32 IntelISH::read(UInt32 offset) {
+    return OSReadLittleInt32(reinterpret_cast<const void *>(mapping->getVirtualAddress()), offset);
+}
+void IntelISH::write(UInt32 offset, UInt32 value) {
+    OSWriteLittleInt32(reinterpret_cast<void *>(mapping->getVirtualAddress()), offset, value);
+    OSSynchronizeIO();
+    (void)read(0x34); // Flush posted PCI writes.
+}
+void IntelISH::advance(Stage next, const char *name, unsigned timeout) {
+    stage = next; elapsed = 0; deadline = timeout;
+    setProperty("TransportState", name);
+    IOLog("IntelISH: stage=%s FWSTS=%08x H2I=%08x I2H=%08x\n",
+          name, read(0x34), read(0x48), read(0x54));
+}
+void IntelISH::fail(const char *reason) {
+    IOLog("IntelISH: transport stopped: %s\n", reason);
+    setProperty("TransportError", reason);
+    advance(Failed, "failed"); snapshot();
+    // Stop notifications/wake gate; do not perform a PCI or power-state reset.
+    write(0x08, savedMask & ~1U);
+    write(0x38, read(0x38) & ~0x80U);
+    write(0x368, savedDMA);
+    pci->setBusMasterEnable((originalCommand & 4) != 0);
+    interrupt->disable();
+    snapshot();
+}
+bool IntelISH::queuePacket(unsigned protocol, unsigned command, const UInt8 *bytes, unsigned size) {
+    if (size > 128 || queued == 8) { fail("TX bounds/queue overflow"); return false; }
+    Packet &p = queue[(head + queued) % 8];
+    bzero(p.bytes, sizeof(p.bytes));
+    if (size) bcopy(bytes, p.bytes, size);
+    p.doorbell = 0x80000000U | (protocol << 10) | (command << 16) | size;
+    ++queued; return true;
+}
+void IntelISH::hbm(UInt8 command, UInt8 address) {
+    UInt8 msg[8] = {0, 0, 4, 0x80, command, address, 0, 0};
+    if (command == 1) { msg[5] = 0; msg[7] = 1; }
+    queuePacket(1, 0, msg, sizeof(msg));
+}
+void IntelISH::nextClient() {
+    while (client < 256 && !(clientMap[client / 8] & (1U << (client % 8)))) ++client;
+    if (client == 256) {
+        setProperty("FirmwareClientCount", clientCount, 32);
+        setProperty("HIDClientAddress", hidAddress, 32);
+        snapshot();
+        if (!hidAddress || hidMaxMessage < 6 || hidMaxMessage > sizeof(assembly.bytes)) {
+            fail("HID client missing/unsupported maximum message length"); return;
+        }
+        advance(ConnectWait, "HID-connect", 1500); clientControl(6); return;
+    }
+    advance(PropertiesWait, "client-properties");
+    hbm(5, static_cast<UInt8>(client));
+}
+void IntelISH::receive(UInt32 bell, const UInt8 *bytes, unsigned size) {
+    unsigned protocol = (bell >> 10) & 15, command = (bell >> 16) & 15;
+    IOLog("IntelISH: RX doorbell=%08x length=%u\n", bell, size);
+    if (protocol == 3) {
+        if (command == 3 || command == 4) {
+            if (size != 4) { fail("invalid reset response length"); return; }
+            if (stage != ResetSend && stage != ResetWait) { fail("unexpected firmware reset"); return; }
+            if (command == 4 && (bytes[0] != 1 || bytes[1] != 0)) {
+                fail("reset response ID mismatch"); return;
+            }
+            if (command == 3) queuePacket(3, 4, bytes, 4);
+            advance(ReadyWait, "firmware-ready", 200);
+        }
+        return;
+    }
+    if (protocol != 1) return;
+    ISHProtocol::Header header {};
+    if (!ISHProtocol::parse(bytes, size, header)) {
+        dump("invalid-ISHTP", bytes, size); fail("invalid ISHTP header/length"); return;
+    }
+    IOLog("IntelISH: ISHTP fw=%u host=%u length=%u complete=%u\n",
+          header.firmware, header.host, header.length, header.complete);
+    const UInt8 *payload = bytes + 4;
+    unsigned length = header.length;
+    if (header.firmware && !header.host) {
+        // Fixed clients are separate from HBM (Linux ishtp/bus.c).
+        dump("fixed-client", bytes, size);
+        if (header.firmware == 13 && header.complete && length == 12 &&
+            ISHProtocol::little32(payload) == 1) {
+            // SYSTEM_STATE_SUBSCRIBE: reply awake, as Linux ishtp_send_resume.
+            UInt8 awake[16] = {2, 0, 0, 0};
+            // We implement no sleep-state transitions yet; advertise no support.
+            sendISHTP(13, 0, awake, sizeof(awake));
+        }
+        return;
+    }
+    if (header.firmware || header.host) {
+        if (!connected || header.firmware != hidAddress || header.host != 1) {
+            dump("unconnected-client", bytes, size); return;
+        }
+        if (!length || !assembly.append(payload, length, hidMaxMessage)) {
+            fail("HID reassembly overflow/empty fragment"); return;
+        }
+        if (header.complete) {
+            // One receive credit per complete message, not per IPC fragment.
+            clientControl(8);
+            receiveHID(assembly.bytes, assembly.used); assembly.used = 0;
+        }
+        return;
+    }
+    if (!header.complete || !length) {
+        dump("invalid-HBM", bytes, size); fail("empty/fragmented HBM message"); return;
+    }
+    if (payload[0] == 8) {
+        if (length != 8 || payload[1] != hidAddress || payload[2] != 1 || !connected) {
+            dump("unexpected-flow-control", bytes, size); return;
+        }
+        if (txCredits >= 255) { fail("excessive TX flow credits"); return; }
+        ++txCredits; IOLog("IntelISH: HID TX credit=%u\n", txCredits);
+        sendHIDRequest(); return;
+    }
+    if (stage == ConnectWait && payload[0] == 0x86) {
+        if (length != 4 || payload[1] != hidAddress || payload[2] != 1 || payload[3]) {
+            dump("HID-connect-rejected", bytes, size); fail("HID connect rejected/malformed"); return;
+        }
+        connected = true; setProperty("HIDConnected", true);
+        clientControl(8);
+        requestHID(33, 0, HIDEnumWait, "HID-device-enumeration"); return;
+    }
+    if (stage == VersionWait && payload[0] == 0x81) {
+        if (length != 4 || payload[1] != 1) { fail("HBM version rejected/malformed"); return; }
+        IOLog("IntelISH: HBM 1.0 accepted (response version %u.%u)\n", payload[3], payload[2]);
+        advance(EnumWait, "client-enumeration"); hbm(4);
+    } else if (stage == EnumWait && payload[0] == 0x84) {
+        if (length != 36) { fail("invalid enumeration bitmap"); return; }
+        bcopy(payload + 4, clientMap, 32); client = 0; nextClient();
+    } else if (stage == PropertiesWait && payload[0] == 0x85) {
+        if (length != 32 || payload[1] != client || payload[2]) {
+            fail("client properties rejected/malformed"); return;
+        }
+        const UInt8 *g = payload + 4;
+        UInt32 maxLength = OSReadLittleInt32(payload, 24);
+        IOLog("IntelISH: client=%u GUID=%08x-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x version=%u max-connections=%u fixed=%u single=%u max-message=%u DMA-header=%u\n",
+            client, OSReadLittleInt32(g, 0), OSReadLittleInt16(g, 4), OSReadLittleInt16(g, 6),
+            g[8],g[9],g[10],g[11],g[12],g[13],g[14],g[15],
+            payload[20],payload[21],payload[22],payload[23],maxLength,payload[28]);
+        static const UInt8 hidGUID[16] = {0x58,0xcd,0xae,0x33,0x79,0xb6,0x54,0x4e,
+            0x9b,0xd9,0xa0,0x4d,0x34,0xf0,0xc2,0x26};
+        char property[32]; snprintf(property, sizeof(property), "FirmwareClient-%u", client);
+        setProperty(property, const_cast<UInt8 *>(payload + 4), 28);
+        if (!memcmp(g, hidGUID, 16)) {
+            hidAddress = client; hidMaxMessage = maxLength; IOLog("IntelISH: HID sensor client found at address=%u\n", client);
+        }
+        ++clientCount; ++client; nextClient();
+    } else { dump("unexpected-HBM", bytes, size); fail("unexpected HBM response"); }
+}
+void IntelISH::dump(const char *label, const UInt8 *bytes, unsigned size) {
+    // Bound unsolicited diagnostics; descriptor data is also retained in IORegistry.
+    unsigned limit = size < 128 ? size : 128;
+    for (unsigned offset = 0; offset < limit; offset += 16) {
+        char hex[49] {}; unsigned end = limit - offset < 16 ? limit - offset : 16;
+        for (unsigned i = 0; i < end; ++i) snprintf(hex + i * 3, 4, "%02x ", bytes[offset + i]);
+        IOLog("IntelISH: %s offset=%u total=%u %s\n", label, offset, size, hex);
+    }
+}
+void IntelISH::sendISHTP(UInt8 firmware, UInt8 host, const UInt8 *bytes, unsigned size) {
+    unsigned fragments = (size + 123) / 124;
+    if (!size || size > (host ? hidMaxMessage : 124) || fragments > 8 - queued) {
+        fail("fragmented TX size/queue limit"); return;
+    }
+    for (unsigned offset = 0; offset < size;) {
+        unsigned count = size - offset < 124 ? size - offset : 124;
+        UInt8 packet[128] {};
+        packet[0] = firmware; packet[1] = host;
+        packet[2] = static_cast<UInt8>(count);
+        packet[3] = offset + count == size ? 0x80 : 0;
+        bcopy(bytes + offset, packet + 4, count);
+        if (!queuePacket(1, 0, packet, count + 4)) return;
+        offset += count;
+    }
+}
+void IntelISH::clientControl(UInt8 command) {
+    UInt8 msg[8] = {command, static_cast<UInt8>(hidAddress), 1, 0};
+    sendISHTP(0, 0, msg, command == 8 ? 8 : 4);
+}
+void IntelISH::requestHID(UInt8 command, UInt8 device, Stage next, const char *name) {
+    if (requestPending) { fail("overlapping HID requests"); return; }
+    requestSize = 0;
+    pendingCommand = command; pendingDevice = device; requestPending = true;
+    advance(next, name, 1500); sendHIDRequest();
+}
+void IntelISH::sendHIDRequest() {
+    if (!connected || !requestPending || !txCredits || stage == Failed) return;
+    UInt8 msg[518] = {pendingCommand, pendingDevice, 0, 0, 0, 0};
+    // Linux ISH leaves request header.size zero; payload still includes report ID.
+    if (requestSize) bcopy(requestData, msg + 6, requestSize);
+    --txCredits; requestPending = false;
+    IOLog("IntelISH: HID request command=%u device=%u report=%u bytes=%u\n",
+          pendingCommand, pendingDevice, requestSize ? requestData[0] : 0, requestSize);
+    sendISHTP(static_cast<UInt8>(hidAddress), 1, msg, 6 + requestSize);
+}
+void IntelISH::receiveHID(const UInt8 *bytes, unsigned size) {
+    // Linux host-interface replies can concatenate several messages.
+    unsigned offset = 0;
+    while (offset < size && stage != Failed) {
+        if (size - offset < 6) { fail("truncated concatenated HID header"); return; }
+        unsigned length = ISHProtocol::little16(bytes + offset + 4);
+        if (length > size - offset - 6) { fail("truncated concatenated HID payload"); return; }
+        receiveHIDMessage(bytes + offset, length + 6);
+        offset += length + 6;
+    }
+}
+void IntelISH::receiveHIDMessage(const UInt8 *bytes, unsigned size) {
+    if (size < 6) { fail("short HID host-interface header"); return; }
+    unsigned length = ISHProtocol::little16(bytes + 4);
+    UInt8 command = bytes[0] & 0x7f;
+    IOLog("IntelISH: HID response command=%u response=%u device=%u status=%u flags=%u length=%u assembled=%u\n",
+          command, !!(bytes[0] & 0x80), bytes[1], bytes[2], bytes[3], length, size);
+    if (length != size - 6) { dump("invalid-HID-length", bytes, size); fail("HID payload length mismatch"); return; }
+    // Input publications may arrive asynchronously; discovery does not enable them.
+    if (command == 5) {
+        if (!bytes[2]) lightInput(bytes[1], bytes + 6, length);
+        return;
+    }
+    if (command == 6) {
+        // Linux report_list: total_size:u16, count:u8, flags:u8, then size:u16 + hostif messages.
+        const UInt8 *list = bytes + 6;
+        if (length < 4) {
+            dump("invalid-input-list", bytes, size); return;
+        }
+        unsigned offset = 4;
+        for (unsigned i = 0; i < list[2]; ++i) {
+            if (length - offset < 8) return;
+            unsigned itemSize = ISHProtocol::little16(list + offset);
+            offset += 2;
+            if (itemSize < 6 || itemSize > length - offset ||
+                (ISHProtocol::little16(list + offset + 4) && ISHProtocol::little16(list + offset + 4) != itemSize - 6)) return;
+            const UInt8 *item = list + offset;
+            if ((item[0] & 0x7f) == 5 && !item[2]) lightInput(item[1], item + 6, itemSize - 6);
+            offset += itemSize;
+        }
+        return;
+    }
+    // ENUM_DEVICES is addressed to the manager, not an individual sensor.
+    // Linux ignores its response device_id; this firmware returns 0x0f.
+    bool enumeration = stage == HIDEnumWait && command == 33;
+    if (!(bytes[0] & 0x80) || bytes[2] || command != pendingCommand ||
+        (!enumeration && bytes[1] != pendingDevice)) {
+        dump("unexpected-HID-response", bytes, size); fail("HID response command/device/status mismatch"); return;
+    }
+    const UInt8 *payload = bytes + 6;
+    if ((stage == ALSFeatureGet || stage == ALSFeatureVerify) && command == 2) {
+        dump("ALS-feature", payload, length);
+        if (length != als.featureBytes || payload[0] != als.report) {
+            fail("ALS feature report ID/length mismatch"); return;
+        }
+        setProperty("ALSFeatureCurrent", const_cast<UInt8 *>(payload), length);
+        unsigned power, reporting, interval;
+        if (!ISHALS::extract(payload, length, als.power, power) ||
+            !ISHALS::extract(payload, length, als.reporting, reporting) ||
+            !ISHALS::extract(payload, length, als.interval, interval)) {
+            fail("ALS feature controls unavailable"); return;
+        }
+        IOLog("IntelISH: ALS feature power=%u reporting=%u interval=%u interval-unit=%x exponent=%d\n",
+              power, reporting, interval, als.interval.unit, als.interval.exponent);
+        setProperty("ALSReportIntervalRaw", interval, 32);
+        if (stage == ALSFeatureGet) {
+            bcopy(payload, originalFeature, length); bcopy(payload, feature, length);
+            setProperty("ALSFeatureOriginal", originalFeature, length);
+            // Preserve interval/sensitivity and every other field. Only power/reporting change.
+            if (!ISHALS::insert(feature, length, als.power, als.power.enabledValue) ||
+                !ISHALS::insert(feature, length, als.reporting, als.reporting.enabledValue)) {
+                fail("ALS control values out of range"); return;
+            }
+            setProperty("ALSFeatureRequested", feature, length);
+            requestReport(3, ALSFeatureSet, "ALS-set-feature");
+        } else {
+            if (power != als.power.enabledValue || reporting != als.reporting.enabledValue) {
+                fail("ALS feature readback did not confirm power/reporting"); return;
+            }
+            setProperty("ALSControlsVerified", true);
+            requestReport(4, ALSInputWait, "ALS-get-input");
+        }
+    } else if (stage == ALSFeatureSet && command == 3) {
+        requestReport(2, ALSFeatureVerify, "ALS-feature-readback");
+    } else if (stage == ALSInputWait && command == 4) {
+        if (!lightInput(bytes[1], payload, length)) { fail("ALS input did not decode"); return; }
+        streamingStarted = true; advance(Streaming, "ALS-reporting");
+        timer->setTimeoutMS(1000);
+    } else if (stage == HIDEnumWait && command == 33) {
+        if (!length || payload[0] > 32 || length != 1 + unsigned(payload[0]) * 9) {
+            fail("invalid HID device enumeration"); return;
+        }
+        deviceCount = payload[0]; setProperty("HIDDeviceCount", deviceCount, 32);
+        setProperty("HIDDeviceList", const_cast<UInt8 *>(payload), length);
+        for (unsigned i = 0; i < deviceCount; ++i) {
+            const UInt8 *info = payload + 1 + i * 9;
+            unsigned id = ISHProtocol::little32(info);
+            if (id > 255) { fail("HID device ID cannot fit host interface"); return; }
+            for (unsigned j = 0; j < i; ++j) if (deviceIDs[j] == id) {
+                fail("duplicate HID device ID"); return;
+            }
+            deviceIDs[i] = static_cast<UInt8>(id);
+            IOLog("IntelISH: HID device index=%u id=%u class=%u PID=%04x VID=%04x\n",
+                i, id, info[4], ISHProtocol::little16(info + 5), ISHProtocol::little16(info + 7));
+        }
+        if (!deviceCount) { advance(Complete, "no-HID-devices"); snapshot(); return; }
+        deviceIndex = 0;
+        requestHID(0, deviceIDs[0], HIDDescriptorWait, "HID-descriptor");
+    } else if ((stage == HIDDescriptorWait && command == 0) ||
+               (stage == ReportDescriptorWait && command == 1)) {
+        if (!length) { fail("empty HID descriptor"); return; }
+        char name[40]; snprintf(name, sizeof(name), "%s-%u",
+            command == 0 ? "HIDDescriptor" : "ReportDescriptor", bytes[1]);
+        if (!setProperty(name, const_cast<UInt8 *>(payload), length)) {
+            fail("cannot retain HID descriptor"); return;
+        }
+        dump(name, payload, length);
+        if (command == 1 && !alsFound) {
+            ISHALS::Layout layout;
+            if (ISHALS::parse(payload, length, layout)) {
+                als = layout; alsDevice = bytes[1]; alsFound = true;
+                IOLog("IntelISH: ALS layout device=%u report=%u feature-bytes=%u input-bytes=%u power=%u/%u reporting=%u/%u illum=%u/%u exponent=%d unit=%x\n",
+                    alsDevice, als.report, als.featureBytes, als.inputBytes,
+                    als.power.bit,als.power.width,als.reporting.bit,als.reporting.width,
+                    als.illuminance.bit,als.illuminance.width,als.illuminance.exponent,als.illuminance.unit);
+            }
+        }
+        if (command == 0) requestHID(1, deviceIDs[deviceIndex], ReportDescriptorWait, "HID-report-descriptor");
+        else if (++deviceIndex < deviceCount)
+            requestHID(0, deviceIDs[deviceIndex], HIDDescriptorWait, "HID-descriptor");
+        else { snapshot(); beginALS(); }
+    } else { fail("unexpected HID discovery stage"); }
+}
+void IntelISH::beginALS() {
+    if (!alsFound) { fail("no supported ALS descriptor found"); return; }
+    setProperty("ALSDeviceID", alsDevice, 8); setProperty("ALSReportID", als.report, 8);
+    setProperty("ALSUnitExponent", static_cast<UInt32>(als.illuminance.exponent), 32);
+    requestReport(2, ALSFeatureGet, "ALS-get-feature");
+}
+void IntelISH::requestReport(UInt8 command, Stage next, const char *name) {
+    if (requestPending) { fail("overlapping ALS requests"); return; }
+    pendingCommand = command; pendingDevice = alsDevice;
+    requestSize = command == 3 ? als.featureBytes : 1;
+    if (command == 3) bcopy(feature, requestData, requestSize);
+    else requestData[0] = static_cast<UInt8>(als.report);
+    requestPending = true; advance(next, name, 1500); sendHIDRequest();
+}
+bool IntelISH::lightInput(UInt8 device, const UInt8 *bytes, unsigned size) {
+    if (!alsFound || device != alsDevice || !size || bytes[0] != als.report) return false;
+    unsigned long long milliLux;
+    if (!ISHALS::milliLux(bytes, size, als, milliLux)) {
+        dump("invalid-ALS-input", bytes, size); setProperty("ALSInputError", "report size/ID/scaling mismatch"); return false;
+    }
+    unsigned raw;
+    ISHALS::extract(bytes, size, als.illuminance, raw);
+    setProperty("ALSInputReport", const_cast<UInt8 *>(bytes), size);
+    setProperty("ALSRawIlluminance", raw, 32);
+    setProperty("ALSExceedsDeclaredMaximum", static_cast<long long>(raw) > als.illuminance.maximum);
+    setProperty("ALSMilliLux", milliLux, 64);
+    setProperty("ALSSampleCount", ++lightSamples, 32);
+    removeProperty("ALSInputError");
+    if (lightSamples <= 8 || !(lightSamples % 30))
+        IOLog("IntelISH: ALS sample=%u raw=%u exponent=%d lux=%llu.%03llu\n",
+              lightSamples, raw, als.illuminance.exponent, milliLux / 1000, milliLux % 1000);
+    return true;
+}
+void IntelISH::pump() {
+    if (stage == Failed) return;
+    UInt32 status = read(0x0c);
+    if (status) write(0x0c, status); // Linux: only busy-clear status is writable.
+    UInt32 bell = read(0x54);
+    if (bell & 0x80000000U) {
+        unsigned size = bell & 0x3ff;
+        UInt8 bytes[128] {};
+        if (size <= sizeof(bytes)) {
+            for (unsigned i = 0; i < (size + 3) / 4; ++i)
+                OSWriteLittleInt32(bytes, i * 4, read(0x60 + i * 4));
+        }
+        // Capture the mailbox before clearing the busy doorbell.
+        write(0x54, 0);
+        if (size > sizeof(bytes)) fail("oversized IPC packet");
+        else receive(bell, bytes, size);
+    }
+    if (stage == Failed) return;
+    if (queued && !(read(0x48) & 0x80000000U)) {
+        Packet &p = queue[head];
+        unsigned size = p.doorbell & 0x3ff;
+        for (unsigned i = 0; i < (size + 3) / 4; ++i)
+            write(0xe0 + i * 4, OSReadLittleInt32(p.bytes, i * 4));
+        IOLog("IntelISH: TX doorbell=%08x length=%u\n", p.doorbell, size);
+        write(0x48, p.doorbell);
+        head = (head + 1) % 8; --queued;
+        if (stage == ResetSend) advance(ResetWait, "reset-ack", 1000);
+    }
+    if (stage == ReadyWait && !queued && !(read(0x48) & 0x80000000U) &&
+        (read(0x34) & 3) == 3) {
+        advance(VersionWait, "HBM-version"); hbm(1);
+    }
+}
+void IntelISH::irq(OSObject *owner, IOInterruptEventSource *, int) {
+    auto *self = OSDynamicCast(IntelISH, owner);
+    if (self && self->mapping && self->transportStarted) self->pump();
+}
+void IntelISH::tick(OSObject *owner, IOTimerEventSource *source) {
+    auto *self = OSDynamicCast(IntelISH, owner);
+    if (!self || !self->mapping) return;
+    if (self->stage == Complete || self->stage == Failed) return;
+    if (self->stage == Streaming) {
+        self->requestReport(4, ALSInputWait, "ALS-get-input");
+    }
+    self->pump();
+    if (self->stage == Complete || self->stage == Failed) return;
+    if (self->stage == Streaming) { source->setTimeoutMS(1000); return; }
+    if (++self->elapsed >= self->deadline || (!self->streamingStarted && ++self->totalTicks >= 6000)) {
+        self->fail("stage/overall timeout (10 ms timer ticks)"); return;
+    }
+    if (!self->streamingStarted && !(self->totalTicks % 100)) self->snapshot();
+    source->setTimeoutMS(10);
+}
+
+void IntelISH::cleanup() {
+    if (interrupt) {
+        interrupt->disable();
+        if (loop && interruptAdded) loop->removeEventSource(interrupt);
+        interrupt->release(); interrupt = nullptr;
+    }
+    interruptAdded = false;
+    if (mapping && transportStarted) {
+        write(0x08, savedMask); write(0x38, savedHost); write(0x368, savedDMA);
+        pci->setBusMasterEnable((originalCommand & 4) != 0);
+    }
+    transportStarted = false;
+    if (timer) {
+        timer->cancelTimeout(); timer->disable();
+        if (loop && timerAdded) loop->removeEventSource(timer);
+        timer->release(); timer = nullptr;
+    }
+    timerAdded = false;
+    if (loop) { loop->release(); loop = nullptr; }
+    if (mapping) { mapping->release(); mapping = nullptr; }
+    if (pci && commandSaved) pci->setMemoryEnable((originalCommand & 2) != 0);
+    commandSaved = false;
+}
+void IntelISH::stop(IOService *provider) {
+    cleanup(); IOService::stop(provider);
+}
+
+extern "C" kern_return_t IntelISH_start(kmod_info_t *, void *) { return KERN_SUCCESS; }
+extern "C" kern_return_t IntelISH_stop(kmod_info_t *, void *) { return KERN_SUCCESS; }
