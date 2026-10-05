@@ -11,6 +11,9 @@
 #include <libkern/OSByteOrder.h>
 #include "Protocol.hpp"
 #include "ALSReport.hpp"
+#include "SMCLight.hpp"
+bool ADDPR(debugEnabled) = true;
+uint32_t ADDPR(debugPrintDelay) = 0;
 
 class IntelISH : public IOService {
     OSDeclareDefaultStructors(IntelISH)
@@ -23,6 +26,14 @@ class IntelISH : public IOService {
     IOCommandGate *gate {nullptr};
     bool gateAdded {false}, pmStarted {false}, suspended {false};
     unsigned wakeCount {0};
+    _Atomic(uint32_t) smcLux;
+    ISHForceBits forceBits;
+    VirtualSMCAPI::Plugin smcPlugin {"IntelISH", 0x601, VirtualSMCAPI::Version};
+    IONotifier *smcNotifier {nullptr};
+    bool smcPrepared {false};
+    _Atomic(bool) smcSubmitted;
+    void prepareSMC();
+    static bool smcHandler(void *, void *, IOService *, IONotifier *);
     void restartTransport();
     static IOReturn powerAction(OSObject *owner, void *state, void *, void *, void *);
     UInt32 savedMask {0}, savedHost {0}, savedDMA {0};
@@ -74,6 +85,10 @@ class IntelISH : public IOService {
     void cleanup();
     static void tick(OSObject *owner, IOTimerEventSource *source);
 public:
+    bool init(OSDictionary *dict) override {
+        atomic_init(&smcLux, UINT32_MAX); atomic_init(&smcSubmitted, false);
+        return IOService::init(dict);
+    }
     bool start(IOService *provider) override;
     void stop(IOService *provider) override;
     IOReturn setPowerState(unsigned long state, IOService *) override;
@@ -143,6 +158,7 @@ IOReturn IntelISH::powerAction(OSObject *owner, void *state, void *, void *, voi
     bool sleep = reinterpret_cast<uintptr_t>(state) == 0;
     if (sleep == self->suspended) return kIOReturnSuccess;
     self->suspended = sleep;
+    atomic_store_explicit(&self->smcLux, UINT32_MAX, memory_order_release);
     self->setProperty("Suspended", sleep);
     self->setProperty("ALSControlsVerified", false);
     if (sleep) {
@@ -186,6 +202,40 @@ void IntelISH::restartTransport() {
     interrupt->enable(); timer->setTimeoutMS(10);
 }
 
+void IntelISH::prepareSMC() {
+    if (smcPrepared) return;
+    smcPrepared = true;
+    // Same sensor description and compatibility keys as upstream SMCLightSensor.
+    const UInt8 sensor[4] = {7, 1, 6, 0}, absent[4] = {}, empty[10] = {}, keyboard[2] = {0, 1};
+    auto &keys = smcPlugin.data;
+    bool ok = VirtualSMCAPI::addKey(SMC_MAKE_IDENTIFIER('A','L','!',' '), keys, VirtualSMCAPI::valueWithUint16(0, &forceBits, SMC_KEY_ATTRIBUTE_READ | SMC_KEY_ATTRIBUTE_WRITE));
+    ok &= VirtualSMCAPI::addKey(SMC_MAKE_IDENTIFIER('A','L','I','0'), keys, VirtualSMCAPI::valueWithData(sensor, 4, SmcKeyTypeAli, nullptr, SMC_KEY_ATTRIBUTE_CONST | SMC_KEY_ATTRIBUTE_READ));
+    ok &= VirtualSMCAPI::addKey(SMC_MAKE_IDENTIFIER('A','L','I','1'), keys, VirtualSMCAPI::valueWithData(absent, 4, SmcKeyTypeAli, nullptr, SMC_KEY_ATTRIBUTE_CONST | SMC_KEY_ATTRIBUTE_READ));
+    ok &= VirtualSMCAPI::addKey(SMC_MAKE_IDENTIFIER('A','L','R','V'), keys, VirtualSMCAPI::valueWithUint16(1, nullptr, SMC_KEY_ATTRIBUTE_CONST | SMC_KEY_ATTRIBUTE_READ));
+    ok &= VirtualSMCAPI::addKey(SMC_MAKE_IDENTIFIER('A','L','V','0'), keys, VirtualSMCAPI::valueWithData(empty, 10, SmcKeyTypeAlv, new ISHLightValue(&smcLux, &forceBits), SMC_KEY_ATTRIBUTE_READ | SMC_KEY_ATTRIBUTE_WRITE));
+    ok &= VirtualSMCAPI::addKey(SMC_MAKE_IDENTIFIER('A','L','V','1'), keys, VirtualSMCAPI::valueWithData(empty, 10, SmcKeyTypeAlv, nullptr, SMC_KEY_ATTRIBUTE_READ | SMC_KEY_ATTRIBUTE_WRITE));
+    ok &= VirtualSMCAPI::addKey(SMC_MAKE_IDENTIFIER('L','K','S','B'), keys, VirtualSMCAPI::valueWithData(keyboard, 2, SmcKeyTypeLkb, nullptr, SMC_KEY_ATTRIBUTE_READ | SMC_KEY_ATTRIBUTE_WRITE));
+    ok &= VirtualSMCAPI::addKey(SMC_MAKE_IDENTIFIER('L','K','S','S'), keys, VirtualSMCAPI::valueWithData(keyboard, 2, SmcKeyTypeLks, nullptr, SMC_KEY_ATTRIBUTE_READ | SMC_KEY_ATTRIBUTE_WRITE));
+    ok &= VirtualSMCAPI::addKey(SMC_MAKE_IDENTIFIER('M','S','L','D'), keys, VirtualSMCAPI::valueWithUint8(0));
+    if (!ok) { setProperty("SMCError", "key allocation failed"); return; }
+    qsort(const_cast<VirtualSMCKeyValue *>(keys.data()), keys.size(), sizeof(VirtualSMCKeyValue), VirtualSMCKeyValue::compare);
+    smcNotifier = VirtualSMCAPI::registerHandler(smcHandler, this);
+    if (!smcNotifier) setProperty("SMCError", "notification registration failed");
+}
+bool IntelISH::smcHandler(void *context, void *, IOService *vsmc, IONotifier *) {
+    auto *self = static_cast<IntelISH *>(context);
+    if (!self || !vsmc) return false;
+    if (atomic_load_explicit(&self->smcSubmitted, memory_order_acquire)) return true;
+    IOReturn result = vsmc->callPlatformFunction(VirtualSMCAPI::SubmitPlugin, true, self, &self->smcPlugin, nullptr, nullptr);
+    self->setProperty("SMCSubmitResult", static_cast<UInt32>(result), 32);
+    IOLog("IntelISH: VirtualSMC light keys submission=%08x\n", result);
+    if (result != kIOReturnSuccess) return false;
+    atomic_store_explicit(&self->smcSubmitted, true, memory_order_release);
+    self->setProperty("SMCSubmitted", true);
+    VirtualSMCAPI::postInterrupt(SmcEventALSChange);
+    return true;
+}
+
 void IntelISH::snapshot() {
     // These status/doorbell registers are read without acknowledging messages.
     static const UInt32 offsets[] = {0x08, 0x0c, 0x34, 0x38, 0x48, 0x54, 0x368};
@@ -219,6 +269,7 @@ void IntelISH::advance(Stage next, const char *name, unsigned timeout) {
           name, read(0x34), read(0x48), read(0x54));
 }
 void IntelISH::fail(const char *reason) {
+    atomic_store_explicit(&smcLux, UINT32_MAX, memory_order_release);
     IOLog("IntelISH: transport stopped: %s\n", reason);
     setProperty("TransportError", reason);
     advance(Failed, "failed"); snapshot();
@@ -559,6 +610,15 @@ bool IntelISH::lightInput(UInt8 device, const UInt8 *bytes, unsigned size) {
     setProperty("ALSMilliLux", milliLux, 64);
     setProperty("ALSSampleCount", ++lightSamples, 32);
     removeProperty("ALSInputError");
+    // FP18.14 lux; reserve UINT32_MAX for invalid and saturate overrange.
+    uint32_t fixed = milliLux > 262143999ULL ? UINT32_MAX - 1 : static_cast<uint32_t>(milliLux * 16384 / 1000);
+    atomic_store_explicit(&smcLux, fixed, memory_order_release);
+    setProperty("SMCLuxFixed", fixed, 32);
+    prepareSMC();
+    if (atomic_load_explicit(&smcSubmitted, memory_order_acquire)) {
+        bool posted = VirtualSMCAPI::postInterrupt(SmcEventALSChange);
+        setProperty("SMCALSNotificationPosted", posted);
+    }
     if (lightSamples <= 8 || !(lightSamples % 30))
         IOLog("IntelISH: ALS sample=%u raw=%u exponent=%d lux=%llu.%03llu\n",
               lightSamples, raw, als.illuminance.exponent, milliLux / 1000, milliLux % 1000);
@@ -649,8 +709,10 @@ void IntelISH::cleanup() {
     commandSaved = false;
 }
 void IntelISH::stop(IOService *provider) {
+    if (atomic_load_explicit(&smcSubmitted, memory_order_acquire)) panic("IntelISH: submitted VirtualSMC plugins cannot be unloaded");
+    if (smcNotifier) { smcNotifier->remove(); smcNotifier = nullptr; }
     cleanup(); IOService::stop(provider);
 }
 
 extern "C" kern_return_t IntelISH_start(kmod_info_t *, void *) { return KERN_SUCCESS; }
-extern "C" kern_return_t IntelISH_stop(kmod_info_t *, void *) { return KERN_SUCCESS; }
+extern "C" kern_return_t IntelISH_stop(kmod_info_t *, void *) { return KERN_FAILURE; }

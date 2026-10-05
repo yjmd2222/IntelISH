@@ -17,8 +17,10 @@
   000000000000000000000012 = {isa = XCBuildConfiguration; name = Debug; buildSettings = {ARCHS = x86_64; SDKROOT = macosx; CLANG_CXX_LANGUAGE_STANDARD = "gnu++14"; GCC_OPTIMIZATION_LEVEL = 0; GCC_TREAT_WARNINGS_AS_ERRORS = YES; CODE_SIGN_IDENTITY = "-"; }; };
   000000000000000000000013 = {isa = XCBuildConfiguration; name = Debug; buildSettings = {
     PRODUCT_NAME = IntelISH; PRODUCT_BUNDLE_IDENTIFIER = org.jinmo.IntelISH;
+    GCC_PREPROCESSOR_DEFINITIONS = ("PRODUCT_NAME=IntelISH");
+    HEADER_SEARCH_PATHS = ("$(PROJECT_DIR)/../YogaSMC/Lilu.kext/Contents/Resources", "$(PROJECT_DIR)/../YogaSMC/VirtualSMC.kext/Contents/Resources");
     INFOPLIST_FILE = Info.plist; MACOSX_DEPLOYMENT_TARGET = 10.14;
-    MODULE_NAME = org.jinmo.IntelISH; MODULE_VERSION = 0.5.0;
+    MODULE_NAME = org.jinmo.IntelISH; MODULE_VERSION = 0.6.1;
     MODULE_START = IntelISH_start; MODULE_STOP = IntelISH_stop;
     KERNEL_EXTENSION_HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/../YogaSMC/MacKernelSDK/Headers";
     KERNEL_FRAMEWORK_HEADERS = "$(PROJECT_DIR)/../YogaSMC/MacKernelSDK/Headers";

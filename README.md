@@ -61,3 +61,9 @@ clang++ -std=c++14 -Wall -Wextra -Werror -fsanitize=address,undefined als-tests.
 ## Power management (0.5.0)
 
 IOService power callbacks serialize through the transport work loop. Sleep cancels polling, disables interrupts and clears host-ready/DMA before PCI power loss. Wake restarts IPC reset, HBM/HID enumeration, descriptor discovery and ALS feature readback. This uses full reinitialization rather than the Linux D0i3 retention path; firmware sleep-state support remains unadvertised. Suspended, WakeCount, PM log lines and fresh ALSControlsVerified expose recovery. Hardware wake verification is pending. No VirtualSMC integration yet.
+
+## VirtualSMC light integration (0.6.0)
+
+IntelISH now supplies the nine light/compatibility keys used by upstream SMCLightSensor, after the first valid ISH reading. ALV0 carries big-endian FP18.14 lux (fractional lux retained), valid/high-gain flags and channel0; ALV1 describes no second sensor. AL! host overrides are honored. Atomic cached reads do no transport work in SMC callbacks; sleep/failure invalidates readings. Each report posts SmcEventALSChange after successful plugin submission. IORegistry exposes SMCSubmitted, SMCSubmitResult, SMCLuxFixed, SMCALSNotificationPosted and SMCError. Requires VirtualSMC1.3.8/Lilu1.7.2 before IntelISH. Like upstream, plugin unload is prohibited once keys are published. Automatic brightness/UI behavior needs runtime verification. Upstream reference: acidanthera/VirtualSMC Sensors/SMCLightSensor; BSD license in VirtualSMC-LICENSE.txt.
+
+0.6.1 corrects key identifier byte order with the SDK SMC_MAKE_IDENTIFIER macro;0.6.0 submission succeeded but names were reversed. Compile-time ALV0 identifier assertion guards the representation.
