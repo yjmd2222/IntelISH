@@ -57,3 +57,7 @@ clang++ -std=c++14 -Wall -Wextra -Werror -fsanitize=address,undefined protocol-t
 clang++ -std=c++14 -Wall -Wextra -Werror -fsanitize=address,undefined als-tests.cpp -o /tmp/ish-als-tests
 /tmp/ish-als-tests test-data/device0-20261005.bin
 ```
+
+## Power management (0.5.0)
+
+IOService power callbacks serialize through the transport work loop. Sleep cancels polling, disables interrupts and clears host-ready/DMA before PCI power loss. Wake restarts IPC reset, HBM/HID enumeration, descriptor discovery and ALS feature readback. This uses full reinitialization rather than the Linux D0i3 retention path; firmware sleep-state support remains unadvertised. Suspended, WakeCount, PM log lines and fresh ALSControlsVerified expose recovery. Hardware wake verification is pending. No VirtualSMC integration yet.

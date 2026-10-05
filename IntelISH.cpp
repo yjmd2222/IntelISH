@@ -3,6 +3,8 @@
 // drivers/hid/intel-ish-hid/ipc/{hw-ish-regs.h,hw-ish.h,pci-ish.c}.
 #include <IOKit/IOService.h>
 #include <IOKit/IOLib.h>
+#include <IOKit/IOCommandGate.h>
+#include <IOKit/pwr_mgt/IOPM.h>
 #include <IOKit/pci/IOPCIDevice.h>
 #include <IOKit/IOTimerEventSource.h>
 #include <IOKit/IOInterruptEventSource.h>
@@ -18,6 +20,11 @@ class IntelISH : public IOService {
     IOTimerEventSource *timer {nullptr};
     IOInterruptEventSource *interrupt {nullptr};
     bool interruptAdded {false}, transportStarted {false};
+    IOCommandGate *gate {nullptr};
+    bool gateAdded {false}, pmStarted {false}, suspended {false};
+    unsigned wakeCount {0};
+    void restartTransport();
+    static IOReturn powerAction(OSObject *owner, void *state, void *, void *, void *);
     UInt32 savedMask {0}, savedHost {0}, savedDMA {0};
     enum Stage { ResetSend, ResetWait, ReadyWait, VersionWait, EnumWait,
                  PropertiesWait, ConnectWait, HIDEnumWait, HIDDescriptorWait, ReportDescriptorWait, ALSFeatureGet, ALSFeatureSet, ALSFeatureVerify, ALSInputWait, Streaming, Complete, Failed };
@@ -69,6 +76,7 @@ class IntelISH : public IOService {
 public:
     bool start(IOService *provider) override;
     void stop(IOService *provider) override;
+    IOReturn setPowerState(unsigned long state, IOService *) override;
 };
 OSDefineMetaClassAndStructors(IntelISH, IOService)
 
@@ -106,21 +114,76 @@ bool IntelISH::start(IOService *provider) {
           (unsigned long long)mapping->getPhysicalAddress(),
           (unsigned long long)mapping->getLength(), originalCommand);
     snapshot();
+    gate = IOCommandGate::commandGate(this);
+    if (!gate || loop->addEventSource(gate) != kIOReturnSuccess) {
+        cleanup(); return false;
+    }
+    gateAdded = true;
+    restartTransport();
+    PMinit(); pmStarted = true;
+    static IOPMPowerState states[2] = {};
+    states[0].version = states[1].version = 1;
+    states[1].capabilityFlags = kIOPMPowerOn;
+    states[1].outputPowerCharacter = kIOPMPowerOn;
+    states[1].inputPowerRequirement = kIOPMPowerOn;
+    provider->joinPMtree(this);
+    registerPowerDriver(this, states, 2);
+    registerService();
+    return true;
+}
+
+// All transport state and MMIO changes serialize with timer/IRQ callbacks.
+IOReturn IntelISH::setPowerState(unsigned long state, IOService *) {
+    if (gate) gate->runAction(powerAction, reinterpret_cast<void *>(state));
+    return kIOPMAckImplied;
+}
+IOReturn IntelISH::powerAction(OSObject *owner, void *state, void *, void *, void *) {
+    auto *self = OSDynamicCast(IntelISH, owner);
+    if (!self || !self->mapping) return kIOReturnNotReady;
+    bool sleep = reinterpret_cast<uintptr_t>(state) == 0;
+    if (sleep == self->suspended) return kIOReturnSuccess;
+    self->suspended = sleep;
+    self->setProperty("Suspended", sleep);
+    self->setProperty("ALSControlsVerified", false);
+    if (sleep) {
+        IOLog("IntelISH: PM sleep; stopping polling and mailbox access\n");
+        self->timer->cancelTimeout();
+        self->interrupt->disable();
+        self->snapshot();
+        self->write(0x08, self->read(0x08) & ~1U);
+        self->write(0x38, self->read(0x38) & ~0x80U);
+        // Linux's firmware-sleep path clears DMA before PCI enters D3.
+        self->write(0x368, 0);
+        self->stage = Complete;
+        self->setProperty("TransportState", "suspended");
+    } else {
+        self->setProperty("WakeCount", ++self->wakeCount, 32);
+        IOLog("IntelISH: PM wake=%u; restarting IPC/HBM/HID and ALS controls\n", self->wakeCount);
+        self->restartTransport();
+    }
+    return kIOReturnSuccess;
+}
+void IntelISH::restartTransport() {
+    timer->cancelTimeout(); interrupt->disable();
+    head = queued = elapsed = totalTicks = 0;
+    client = clientCount = hidAddress = hidMaxMessage = txCredits = 0;
+    deviceCount = deviceIndex = requestSize = 0;
+    connected = requestPending = alsFound = streamingStarted = false;
+    assembly.used = 0;
+    bzero(clientMap, sizeof(clientMap));
+    als = ISHALS::Layout{};
+    removeProperty("TransportError"); removeProperty("ALSInputError");
+    setProperty("HIDConnected", false); setProperty("ALSControlsVerified", false);
+    removeProperty("ALSMilliLux"); removeProperty("ALSRawIlluminance");
+    pci->setMemoryEnable(true); pci->setBusMasterEnable(true);
     transportStarted = true;
-    pci->setBusMasterEnable(true);
-    // Linux Sunrise Point sequence: host-ready, interrupt enable, DMA wake gate.
-    // HBM 1.0 uses mailbox messages; no host DMA buffers are allocated/offered.
-    write(0x38, savedHost | 0x80);
-    write(0x08, (savedMask | 1) & ~0x100U);
-    write(0x368, 1);
-    write(0x54, 0);
+    write(0x38, read(0x38) | 0x80);
+    write(0x08, (read(0x08) | 1) & ~0x100U);
+    write(0x368, 1); write(0x54, 0);
     advance(ResetSend, "reset-send", 1000);
     UInt8 reset[4] = {1, 0, 0, 0};
     queuePacket(3, 3, reset, sizeof(reset));
-    interrupt->enable();
-    timer->setTimeoutMS(10);
-    registerService();
-    return true;
+    interrupt->enable(); timer->setTimeoutMS(10);
 }
 
 void IntelISH::snapshot() {
@@ -502,7 +565,7 @@ bool IntelISH::lightInput(UInt8 device, const UInt8 *bytes, unsigned size) {
     return true;
 }
 void IntelISH::pump() {
-    if (stage == Failed) return;
+    if (suspended || stage == Failed) return;
     UInt32 status = read(0x0c);
     if (status) write(0x0c, status); // Linux: only busy-clear status is writable.
     UInt32 bell = read(0x54);
@@ -518,7 +581,7 @@ void IntelISH::pump() {
         if (size > sizeof(bytes)) fail("oversized IPC packet");
         else receive(bell, bytes, size);
     }
-    if (stage == Failed) return;
+    if (suspended || stage == Failed) return;
     if (queued && !(read(0x48) & 0x80000000U)) {
         Packet &p = queue[head];
         unsigned size = p.doorbell & 0x3ff;
@@ -540,7 +603,7 @@ void IntelISH::irq(OSObject *owner, IOInterruptEventSource *, int) {
 }
 void IntelISH::tick(OSObject *owner, IOTimerEventSource *source) {
     auto *self = OSDynamicCast(IntelISH, owner);
-    if (!self || !self->mapping) return;
+    if (!self || !self->mapping || self->suspended) return;
     if (self->stage == Complete || self->stage == Failed) return;
     if (self->stage == Streaming) {
         self->requestReport(4, ALSInputWait, "ALS-get-input");
@@ -556,6 +619,13 @@ void IntelISH::tick(OSObject *owner, IOTimerEventSource *source) {
 }
 
 void IntelISH::cleanup() {
+    if (pmStarted) { PMstop(); pmStarted = false; }
+    if (gate) {
+        gate->disable();
+        if (loop && gateAdded) loop->removeEventSource(gate);
+        gate->release(); gate = nullptr;
+    }
+    gateAdded = false;
     if (interrupt) {
         interrupt->disable();
         if (loop && interruptAdded) loop->removeEventSource(interrupt);

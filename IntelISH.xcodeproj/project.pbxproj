@@ -18,7 +18,7 @@
   000000000000000000000013 = {isa = XCBuildConfiguration; name = Debug; buildSettings = {
     PRODUCT_NAME = IntelISH; PRODUCT_BUNDLE_IDENTIFIER = org.jinmo.IntelISH;
     INFOPLIST_FILE = Info.plist; MACOSX_DEPLOYMENT_TARGET = 10.14;
-    MODULE_NAME = org.jinmo.IntelISH; MODULE_VERSION = 0.4.1;
+    MODULE_NAME = org.jinmo.IntelISH; MODULE_VERSION = 0.5.0;
     MODULE_START = IntelISH_start; MODULE_STOP = IntelISH_stop;
     KERNEL_EXTENSION_HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/../YogaSMC/MacKernelSDK/Headers";
     KERNEL_FRAMEWORK_HEADERS = "$(PROJECT_DIR)/../YogaSMC/MacKernelSDK/Headers";
