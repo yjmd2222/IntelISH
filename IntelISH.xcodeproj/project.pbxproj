@@ -97,12 +97,12 @@
       name = Debug;
       buildSettings = {
     PRODUCT_NAME = IntelISH;
-      PRODUCT_BUNDLE_IDENTIFIER = org.jinmo.IntelISH;
+      PRODUCT_BUNDLE_IDENTIFIER = org.yjmd2222.IntelISH;
     GCC_PREPROCESSOR_DEFINITIONS = ("PRODUCT_NAME=IntelISH", "DEBUG=1");
     HEADER_SEARCH_PATHS = ("$(PROJECT_DIR)/Lilu.kext/Contents/Resources", "$(PROJECT_DIR)/VirtualSMC.kext/Contents/Resources");
     INFOPLIST_FILE = IntelISH/Info.plist;
       MACOSX_DEPLOYMENT_TARGET = 10.14;
-    MODULE_NAME = org.jinmo.IntelISH;
+    MODULE_NAME = org.yjmd2222.IntelISH;
       MODULE_VERSION = 0.6.1;
     MODULE_START = IntelISH_start;
       MODULE_STOP = IntelISH_stop;
@@ -125,12 +125,12 @@
       name = Release;
       buildSettings = {
     PRODUCT_NAME = IntelISH;
-      PRODUCT_BUNDLE_IDENTIFIER = org.jinmo.IntelISH;
+      PRODUCT_BUNDLE_IDENTIFIER = org.yjmd2222.IntelISH;
     GCC_PREPROCESSOR_DEFINITIONS = ("PRODUCT_NAME=IntelISH");
     HEADER_SEARCH_PATHS = ("$(PROJECT_DIR)/Lilu.kext/Contents/Resources", "$(PROJECT_DIR)/VirtualSMC.kext/Contents/Resources");
     INFOPLIST_FILE = IntelISH/Info.plist;
       MACOSX_DEPLOYMENT_TARGET = 10.14;
-    MODULE_NAME = org.jinmo.IntelISH;
+    MODULE_NAME = org.yjmd2222.IntelISH;
       MODULE_VERSION = 0.6.1;
     MODULE_START = IntelISH_start;
       MODULE_STOP = IntelISH_stop;
