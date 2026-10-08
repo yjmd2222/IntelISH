@@ -1,6 +1,11 @@
 IntelISH Changelog
 ==================
 
+#### v0.7.0
+- Added accelerometer descriptor parsing, feature readback and raw signed XYZ samples
+- Shared serialized transport polling with ALS; sensor metadata and timestamps in IORegistry
+- Hardware movement and orientation anchors verified; no automatic rotation or gyro acquisition
+
 #### v0.6.1
 - Fixed VirtualSMC key identifier byte order (SMC_MAKE_IDENTIFIER)
 - Moved sources into `IntelISH/`, tests into `tests/`, dependencies to project-local paths

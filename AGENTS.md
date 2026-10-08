@@ -1,12 +1,18 @@
 # IntelISH macOS port
 
-Last updated 2026-10-05.
+Last updated 2026-10-08.
 
 Target: HP Elite x2 1012 G2, Intel Sunrise Point-LP ISH PCI `8086:9d35`.
 Linux reference: `../refs/linux-sensors-camera/linux/drivers/hid/intel-ish-hid/`,
 commit a90ee43 (2026-10-04), GPL-2.0-only. Keep upstream reference files untouched.
 
-## Current stage
+## Current stage (2026-10-08)
+
+Branch `motion-sensors`, 0.7.0 adds accelerometer decoding/control to the existing ALS transport. Accelerometer implementation committed on this branch. Captured device0/report7 has signed32 XYZ at report-inclusive bits152/184/216, exponent−6/unit0, input32/feature229 bytes. Feature readback and raw samples/metadata are exposed in IORegistry; gyro and automatic rotation are not enabled. Hardware sample delivery and cardinal orientation anchors verified; `../tools/accel-probe.py` captures all diagnostics while the user follows pose prompts. Full status, exact EFI backups and undo live in `../context/sensors.md`. Project-local SDKs are described in README.md. Host accel/ALS/protocol sanitizer tests and Debug build pass.
+
+## Earlier stages (historical)
+
+### ALS 0.4.1
 
 Version 0.4.1 adds ALS report control and decoding after HID discovery.
 ALSReport.hpp parses runtime descriptors rather than assuming field offsets.

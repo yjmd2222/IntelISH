@@ -103,7 +103,7 @@
     INFOPLIST_FILE = IntelISH/Info.plist;
       MACOSX_DEPLOYMENT_TARGET = 10.14;
     MODULE_NAME = org.yjmd2222.IntelISH;
-      MODULE_VERSION = 0.6.1;
+      MODULE_VERSION = 0.7.0;
     MODULE_START = IntelISH_start;
       MODULE_STOP = IntelISH_stop;
     KERNEL_EXTENSION_HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/MacKernelSDK/Headers";
@@ -131,7 +131,7 @@
     INFOPLIST_FILE = IntelISH/Info.plist;
       MACOSX_DEPLOYMENT_TARGET = 10.14;
     MODULE_NAME = org.yjmd2222.IntelISH;
-      MODULE_VERSION = 0.6.1;
+      MODULE_VERSION = 0.7.0;
     MODULE_START = IntelISH_start;
       MODULE_STOP = IntelISH_stop;
     KERNEL_EXTENSION_HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/MacKernelSDK/Headers";
