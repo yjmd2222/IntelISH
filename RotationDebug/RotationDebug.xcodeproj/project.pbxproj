@@ -1,0 +1,27 @@
+// !$*UTF8*$!
+{ archiveVersion = 1; classes = {}; objectVersion = 56; objects = {
+000000000000000000000064 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Sources/main.swift"; sourceTree = "<group>"; };
+0000000000000000000000C8 = {isa = PBXBuildFile; fileRef = 000000000000000000000064; };
+000000000000000000000065 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "../IntelISHRotation/Sources/RotationController.swift"; sourceTree = "<group>"; };
+0000000000000000000000C9 = {isa = PBXBuildFile; fileRef = 000000000000000000000065; };
+000000000000000000000066 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "../IntelISHRotation/Sources/RotationPolicy.swift"; sourceTree = "<group>"; };
+0000000000000000000000CA = {isa = PBXBuildFile; fileRef = 000000000000000000000066; };
+000000000000000000000001 = {isa = PBXProject; buildConfigurationList = 00000000000000000000000A; compatibilityVersion = "Xcode 14.0"; mainGroup = 000000000000000000000002; productRefGroup = 000000000000000000000003; projectDirPath = ""; projectRoot = ""; targets = (000000000000000000000004); };
+000000000000000000000002 = {isa = PBXGroup; children = (000000000000000000000064,000000000000000000000065,000000000000000000000066,00000000000000000000012C,00000000000000000000012E,000000000000000000000003); sourceTree = "<group>"; };
+00000000000000000000012C = {isa = PBXFileReference; lastKnownFileType = text; path = ../LICENSE; sourceTree = "<group>"; };
+00000000000000000000012D = {isa = PBXBuildFile; fileRef = 00000000000000000000012C; };
+00000000000000000000012E = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../IntelISHRotation/Sources/HiDPIModePolicy.swift; sourceTree = "<group>"; };
+00000000000000000000012F = {isa = PBXBuildFile; fileRef = 00000000000000000000012E; };
+000000000000000000000003 = {isa = PBXGroup; name = Products; children = (000000000000000000000005); sourceTree = "<group>"; };
+000000000000000000000005 = {isa = PBXFileReference; explicitFileType = wrapper.application; path = RotationDebug.app; sourceTree = BUILT_PRODUCTS_DIR; };
+000000000000000000000004 = {isa = PBXNativeTarget; buildConfigurationList = 00000000000000000000000B; buildPhases = (000000000000000000000006,000000000000000000000007,000000000000000000000008); buildRules = (); dependencies = (); name = RotationDebug; productName = RotationDebug; productReference = 000000000000000000000005; productType = "com.apple.product-type.application"; };
+000000000000000000000006 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (0000000000000000000000C8,0000000000000000000000C9,0000000000000000000000CA,00000000000000000000012F); runOnlyForDeploymentPostprocessing = 0; };
+000000000000000000000007 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+000000000000000000000008 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (00000000000000000000012D); runOnlyForDeploymentPostprocessing = 0; };
+00000000000000000000000A = {isa = XCConfigurationList; buildConfigurations = (00000000000000000000000C,00000000000000000000000D); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+00000000000000000000000B = {isa = XCConfigurationList; buildConfigurations = (00000000000000000000000E,00000000000000000000000F); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+00000000000000000000000C = {isa = XCBuildConfiguration; name = Debug; buildSettings = {}; };
+00000000000000000000000D = {isa = XCBuildConfiguration; name = Release; buildSettings = {}; };
+00000000000000000000000E = {isa = XCBuildConfiguration; name = Debug; buildSettings = {ARCHS = x86_64; SDKROOT = macosx; MACOSX_DEPLOYMENT_TARGET = 13.0; SWIFT_VERSION = 5.0; SWIFT_ACTIVE_COMPILATION_CONDITIONS = ROTATION_DEBUG; SWIFT_TREAT_WARNINGS_AS_ERRORS = YES; CLANG_ENABLE_MODULES = YES; PRODUCT_NAME = RotationDebug; PRODUCT_BUNDLE_IDENTIFIER = org.yjmd2222.RotationDebug; INFOPLIST_FILE = Info.plist; CODE_SIGN_IDENTITY = "-"; CODE_SIGN_STYLE = Manual; ENABLE_HARDENED_RUNTIME = NO; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; }; };
+00000000000000000000000F = {isa = XCBuildConfiguration; name = Release; buildSettings = {ARCHS = x86_64; SDKROOT = macosx; MACOSX_DEPLOYMENT_TARGET = 13.0; SWIFT_VERSION = 5.0; SWIFT_ACTIVE_COMPILATION_CONDITIONS = ROTATION_DEBUG; SWIFT_TREAT_WARNINGS_AS_ERRORS = YES; CLANG_ENABLE_MODULES = YES; PRODUCT_NAME = RotationDebug; PRODUCT_BUNDLE_IDENTIFIER = org.yjmd2222.RotationDebug; INFOPLIST_FILE = Info.plist; CODE_SIGN_IDENTITY = "-"; CODE_SIGN_STYLE = Manual; ENABLE_HARDENED_RUNTIME = NO; SWIFT_OPTIMIZATION_LEVEL = "-O"; }; };
+}; rootObject = 000000000000000000000001; }

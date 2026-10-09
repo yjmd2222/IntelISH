@@ -14,11 +14,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         if !diagnostics && !acquireInstance() { NSApp.terminate(nil); return }
-        let menu = NSMenu(title: "ISHRotation")
+        let menu = NSMenu(title: "IntelISHRotation")
         controller = RotationController(menu: diagnostics ? nil : menu, defaults: .standard, monitoringOnly: diagnostics)
         if diagnostics {
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                print("Monitoring-only diagnostics: ~/Library/Logs/ISHRotation/rotation.log")
+                print("Monitoring-only diagnostics: ~/Library/Logs/IntelISHRotation/rotation.log")
                 NSApp.terminate(nil)
             }
             return
@@ -29,11 +29,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let logs = NSMenuItem(title: "Open Logs", action: #selector(openLogs), keyEquivalent: "")
         logs.target = self; menu.addItem(logs)
         menu.addItem(.separator())
-        let quit = NSMenuItem(title: "Quit ISHRotation", action: #selector(quitApp), keyEquivalent: "q")
+        let quit = NSMenuItem(title: "Quit IntelISHRotation", action: #selector(quitApp), keyEquivalent: "q")
         quit.target = self; menu.addItem(quit)
         menu.delegate = self
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        item?.button?.image = NSImage(systemSymbolName: "rotate.right", accessibilityDescription: "ISHRotation")
+        item?.button?.image = NSImage(systemSymbolName: "rotate.right", accessibilityDescription: "IntelISHRotation")
         item?.button?.toolTip = "IntelISH Display Rotation"
         item?.menu = menu
         refreshLogin()
@@ -47,7 +47,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         catch { loginLog("Cannot create instance directory: \(error)"); return false }
         instanceFD = open(folder.appendingPathComponent("instance.lock").path, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
         guard instanceFD >= 0, flock(instanceFD, LOCK_EX | LOCK_NB) == 0 else {
-            loginLog("Another ISHRotation instance is running, or instance lock failed")
+            loginLog("Another IntelISHRotation instance is running, or instance lock failed")
             if instanceFD >= 0 { close(instanceFD); instanceFD = -1 }
             return false
         }
@@ -80,12 +80,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     @objc private func openLogs() {
         NSWorkspace.shared.open(FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("Logs/ISHRotation", isDirectory: true))
+            .appendingPathComponent("Logs/IntelISHRotation", isDirectory: true))
     }
     @objc private func quitApp() { NSApp.terminate(nil) }
     private func loginLog(_ text: String) {
         let directory = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("Logs/ISHRotation", isDirectory: true)
+            .appendingPathComponent("Logs/IntelISHRotation", isDirectory: true)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let url = directory.appendingPathComponent("login.log")
         if let size = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? NSNumber,

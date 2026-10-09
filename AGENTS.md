@@ -12,7 +12,11 @@ Branch `motion-sensors`, 0.7.0 adds accelerometer decoding/control to the existi
 
 ## Standalone rotation app (2026-10-09)
 
-Branch standalone-rotation (base main f31fe3d) adds ISHRotation/, a separate app Xcode project; driver source unchanged. Release app build/policy checks pass; app installed and enabled with old YogaSMCNC rotation disabled. Connected hardware round trip works; unplugged late1x fallback observed. App0.1.1 adds bounded HiDPI preservation, build/selection tests pass; unplugged repeated retest passes. Extra blanking/reannounce follow-up and modern login launch pending. Own README documents dependencies, build, diagnostics and release packaging. Full live status/undo in ../context/rotation.md; controls-only YogaSMC worktree in ../context/development.md. App source committed on standalone-rotation; not pushed.
+Branch standalone-rotation (base main f31fe3d) adds IntelISHRotation/, a separate app Xcode project; driver source unchanged. Release app build/policy checks pass; production app installed but now stopped/AutoRotate disabled for command-driven debug tests; old YogaSMCNC rotation remains disabled. Connected hardware round trip works; unplugged late1x fallback observed. App0.1.1 adds bounded HiDPI preservation, build/selection tests pass; unplugged repeated retest passes. Extra blanking/reannounce follow-up and modern login launch pending. Own README documents dependencies, build, diagnostics and release packaging. Full live status/undo in ../context/rotation.md; controls-only YogaSMC worktree in ../context/development.md. App source committed on standalone-rotation; not pushed.
+
+## Command-driven debugging (2026-10-09)
+
+Branch rotation-debug from60ba864 adds RotationDebug/, an independently built debug app sharing production sources under ROTATION_DEBUG. It accepts agent commands instead of sensor orientation; no driver/EFI changes. Installed at /Applications/RotationDebug.app; telemetry and test runner documented in RotationDebug/README.md. Production0.1.2 now saves corrected HiDPI through a permanent display configuration; installed but stopped for debugging. Connected and unplugged90°/270° repeats retain2x with repair off; unplugged reboot persistence passes. Runtime findings and exact preference undo belong in ../context/rotation.md.
 
 ## Earlier stages (historical)
 

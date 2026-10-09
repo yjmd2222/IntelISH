@@ -32,4 +32,6 @@ Ambient light and transport recovery are implemented. Version 0.7.0 adds descrip
 
 ## Optional display rotation app
 
-[ISHRotation](ISHRotation/README.md) is a separate Xcode app project in this repository. It reads accelerometer samples directly, offers Auto-Rotate/Rotation Lock and modern login startup, and requires FBReannounce0.2.3 plus the pinned patched Lilu runtime. YogaSMC is not required. Initial standalone app verification is in progress. IntelISH-only users do not need the app. Rotation bundles can be assembled using the documented packaging script; this does not publish a release.
+[IntelISHRotation](IntelISHRotation/README.md) is a separate Xcode app project in this repository. It reads accelerometer samples directly, offers Auto-Rotate/Rotation Lock and modern login startup, and requires FBReannounce0.2.3 plus the pinned patched Lilu runtime. YogaSMC is not required. Connected and unplugged portrait HiDPI have passed command-driven tests, including unplugged reboot persistence. IntelISH-only users do not need the app. Rotation bundles can be assembled using the documented packaging script; this does not publish a release.
+
+[RotationDebug](RotationDebug/README.md) is the development-only command-driven rotation tool. It is built separately and is not included in release packages.

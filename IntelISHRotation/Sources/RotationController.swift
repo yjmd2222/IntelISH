@@ -31,6 +31,9 @@ final class RotationController: NSObject {
     private var lockItem: NSMenuItem?
     private var statusItem: NSMenuItem?
     private let logURL: URL?
+#if ROTATION_DEBUG
+    private var debugRepair = false
+#endif
 
     init(menu: NSMenu?, defaults: UserDefaults, monitoringOnly: Bool = false) {
         self.defaults = defaults
@@ -38,8 +41,13 @@ final class RotationController: NSObject {
         locked = defaults.bool(forKey: "RotationLocked")
         preferredLongEdge = defaults.integer(forKey: "HiDPILongEdge")
         preferredShortEdge = defaults.integer(forKey: "HiDPIShortEdge")
+#if ROTATION_DEBUG
+        let logDirectory = "Logs/RotationDebug"
+#else
+        let logDirectory = "Logs/IntelISHRotation"
+#endif
         let directory = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first?
-            .appendingPathComponent("Logs/ISHRotation", isDirectory: true)
+            .appendingPathComponent(logDirectory, isDirectory: true)
         if let directory = directory {
             try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: nil)
         }
@@ -140,6 +148,10 @@ final class RotationController: NSObject {
     }
     private func poll() {
         guard !sleeping else { return }
+#if ROTATION_DEBUG
+        debugPoll()
+        return
+#else
         let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IntelISH"))
         guard service != 0 else { policy.reset(); publish("Motion sensor unavailable", ready: false); return }
         defer { IOObjectRelease(service) }
@@ -229,7 +241,74 @@ final class RotationController: NSObject {
         log("Request angle=\(desired) raw-g=(\(x),\(y),\(z))")
         logTopology("Before rotation")
         if !rotate(display, to: desired) { publish("Rotation request unavailable", ready: true) }
+#endif
     }
+#if ROTATION_DEBUG
+    // This build never reads acceleration for policy or requests orientation by itself.
+    private func debugPoll() {
+        guard let id = internalDisplay() else { return }
+        let angle = Int32(CGDisplayRotation(id))
+        if observedAngle != angle {
+            observedAngle = angle; scalingWindowUntil = ProcessInfo.processInfo.systemUptime + 12; scalingAttempts = 0
+            logTopology("Debug orientation observed")
+        }
+        if debugRepair && !legacyControllerActive() {
+            preserveHiDPI(id, angle: angle, now: ProcessInfo.processInfo.systemUptime)
+        }
+    }
+    func debugCommand(_ command: String, completion: @escaping (String) -> Void) {
+        queue.async {
+            self.log("DEBUG command begin: \(command)")
+            var result = "unknown command"
+            let fields = command.split(separator: " ").map(String.init)
+            if command == "status" { self.logTopology("Debug status"); result = "status recorded" }
+            else if command == "repair on" || command == "repair off" {
+                self.debugRepair = command == "repair on"
+                self.scalingWindowUntil = ProcessInfo.processInfo.systemUptime + 12; self.scalingAttempts = 0
+                result = "automatic HiDPI repair=\(self.debugRepair)"
+            } else if self.legacyControllerActive() { result = "blocked: legacy YogaSMC rotation enabled" }
+            else if !self.reannounceReady(requireGuard: true) { result = "blocked: display support unavailable" }
+            else if let id = self.internalDisplay() {
+                if fields.count == 2, fields[0] == "rotate", let angle = Int32(fields[1]), [0,90,180,270].contains(angle) {
+                    self.logTopology("Before debug rotation")
+                    if (angle == 90 || angle == 270) && CGDisplayIsInMirrorSet(id) != 0 && !self.extendInternalDisplay(id) {
+                        result = "error: could not leave mirror set"
+                    } else if let freshID = self.internalDisplay() {
+                        self.scalingWindowUntil = ProcessInfo.processInfo.systemUptime + 12; self.scalingAttempts = 0
+                        result = Int32(CGDisplayRotation(freshID)) == angle ? "already at \(angle)" : (self.rotate(freshID, to: angle) ? "rotation requested \(angle)" : "error: rotation request failed")
+                        self.logTopology("After debug rotation call")
+                    } else { result = "error: display unavailable after extending" }
+                } else if command == "native" || command == "hidpi" || command == "hidpi save" {
+                    result = self.debugSetMode(id, hiDPI: command != "native", permanent: command == "hidpi save")
+                }
+            } else { result = "error: internal display unavailable" }
+            self.log("DEBUG command end: \(command): \(result)")
+            completion(result)
+        }
+    }
+    private func debugSetMode(_ id: CGDirectDisplayID, hiDPI: Bool, permanent: Bool) -> String {
+        guard CGDisplayIsInMirrorSet(id) == 0, let current = CGDisplayCopyDisplayMode(id) else { return "error: requires unmirrored display" }
+        let options = [kCGDisplayShowDuplicateLowResolutionModes:kCFBooleanTrue] as CFDictionary
+        guard let modes = CGDisplayCopyAllDisplayModes(id, options) as? [CGDisplayMode] else { return "error: modes unavailable" }
+        var target: CGDisplayMode?
+        if hiDPI {
+            let descriptions = modes.map { HiDPIModeDescription(width:$0.width, height:$0.height, pixelWidth:$0.pixelWidth, pixelHeight:$0.pixelHeight, refreshRate:$0.refreshRate) }
+            let long = preferredLongEdge > 0 ? preferredLongEdge : max(current.pixelWidth,current.pixelHeight)/2
+            let short = preferredShortEdge > 0 ? preferredShortEdge : min(current.pixelWidth,current.pixelHeight)/2
+            let angle = Int32(CGDisplayRotation(id))
+            if let index = HiDPIModePolicy.choose(descriptions,longEdge:long,shortEdge:short,portrait:angle == 90 || angle == 270,refreshRate:current.refreshRate) { target = modes[index] }
+        } else {
+            target = modes.filter { $0.width == current.pixelWidth && $0.height == current.pixelHeight && $0.width == $0.pixelWidth && $0.height == $0.pixelHeight }.min { abs($0.refreshRate-current.refreshRate) < abs($1.refreshRate-current.refreshRate) }
+        }
+        guard let mode = target else { return "error: matching mode absent" }
+        if !permanent && current.width == mode.width && current.height == mode.height && current.pixelWidth == mode.pixelWidth && current.pixelHeight == mode.pixelHeight && abs(current.refreshRate-mode.refreshRate) < 0.1 {
+            return "mode already selected logical=\(mode.width)x\(mode.height)"
+        }
+        let result = permanent ? saveDisplayMode(id, mode: mode) : CGDisplaySetDisplayMode(id,mode,nil)
+        logTopology("After debug mode selection")
+        return "\(result == .success ? "mode set" : "error: mode set") permanent=\(permanent) result=\(result.rawValue) logical=\(mode.width)x\(mode.height) backing=\(mode.pixelWidth)x\(mode.pixelHeight)"
+    }
+#endif
     private func preserveHiDPI(_ id: CGDirectDisplayID, angle: Int32, now: TimeInterval) {
         guard CGDisplayIsInMirrorSet(id) == 0, let current = CGDisplayCopyDisplayMode(id) else { return }
         let signature = "\(current.width)x\(current.height)/\(current.pixelWidth)x\(current.pixelHeight)"
@@ -261,10 +340,20 @@ final class RotationController: NSObject {
             portrait: angle == 90 || angle == 270, refreshRate: current.refreshRate) else { return }
         lastScalingAttempt = now; scalingAttempts += 1
         let target = modes[index]
-        log("Restore HiDPI logical=\(target.width)x\(target.height) backing=\(target.pixelWidth)x\(target.pixelHeight) hz=\(target.refreshRate), attempt=\(scalingAttempts)")
-        let result = CGDisplaySetDisplayMode(id, target, nil)
-        log("Restore HiDPI result=\(result.rawValue)")
+        log("Save HiDPI logical=\(target.width)x\(target.height) backing=\(target.pixelWidth)x\(target.pixelHeight) hz=\(target.refreshRate), attempt=\(scalingAttempts)")
+        let result = saveDisplayMode(id, mode: target)
+        log("Save HiDPI permanent result=\(result.rawValue)")
         logTopology("After HiDPI restore")
+    }
+    // Save the selected mode for this display/orientation/topology, rather than
+    // leaving WindowServer's saved native portrait choice to win next rotation.
+    private func saveDisplayMode(_ id: CGDirectDisplayID, mode: CGDisplayMode) -> CGError {
+        var config: CGDisplayConfigRef?
+        let begin = CGBeginDisplayConfiguration(&config)
+        guard begin == .success, let transaction = config else { return begin == .success ? .failure : begin }
+        let configure = CGConfigureDisplayWithDisplayMode(transaction, id, mode, nil)
+        guard configure == .success else { CGCancelDisplayConfiguration(transaction); return configure }
+        return CGCompleteDisplayConfiguration(transaction, .permanently)
     }
     private func reannouncePending() -> Bool {
         var iterator: io_iterator_t = 0
@@ -298,7 +387,15 @@ final class RotationController: NSObject {
         guard let displays = onlineDisplays(), displays.contains(internalID) else { return false }
         let source = CGDisplayMirrorsDisplay(internalID)
         let master = source == kCGNullDirectDisplay ? internalID : source
-        let mirrors = displays.filter { CGDisplayMirrorsDisplay($0) == master }
+        var mirrors = displays.filter { CGDisplayMirrorsDisplay($0) == master }
+#if ROTATION_DEBUG
+        if mirrors.isEmpty && displays.count == 2 && displays.allSatisfy({ CGDisplayIsInMirrorSet($0) != 0 }) {
+            // On this captured two-panel topology both mirror masters reported0.
+            // Restrict fallback to the unambiguous two-display case.
+            mirrors = displays
+            log("Debug two-display mirror fallback: detach both members")
+        }
+#endif
         guard !mirrors.isEmpty else {
             log("Cannot leave internal mirror set: no mirrored members found")
             return false

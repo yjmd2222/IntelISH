@@ -11,7 +11,7 @@ for name in ('app', 'intelish', 'fbreannounce', 'output'):
 args = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
 expected = {
-    'ISHRotation.app': (args.app, 'org.yjmd2222.ISHRotation', '0.1.1'),
+    'IntelISHRotation.app': (args.app, 'org.yjmd2222.ISHRotation', '0.1.2'),
     'IntelISH.kext': (args.intelish, 'org.yjmd2222.IntelISH', '0.7.0'),
     'FBReannounce.kext': (args.fbreannounce, 'org.yjmd2222.FBReannounce', '0.2.3'),
 }
