@@ -12,6 +12,8 @@
 #include <libkern/OSByteOrder.h>
 #include "Protocol.hpp"
 #include "ALSReport.hpp"
+#include "AccelerometerReport.hpp"
+#include <kern/clock.h>
 #include "SMCLight.hpp"
 bool ADDPR(debugEnabled) = true;
 uint32_t ADDPR(debugPrintDelay) = 0;
@@ -39,7 +41,7 @@ class IntelISH : public IOService {
     static IOReturn powerAction(OSObject *owner, void *state, void *, void *, void *);
     UInt32 savedMask {0}, savedHost {0}, savedDMA {0};
     enum Stage { ResetSend, ResetWait, ReadyWait, VersionWait, EnumWait,
-                 PropertiesWait, ConnectWait, HIDEnumWait, HIDDescriptorWait, ReportDescriptorWait, ALSFeatureGet, ALSFeatureSet, ALSFeatureVerify, ALSInputWait, Streaming, Complete, Failed };
+                 PropertiesWait, ConnectWait, HIDEnumWait, HIDDescriptorWait, ReportDescriptorWait, ALSFeatureGet, ALSFeatureSet, ALSFeatureVerify, ALSInputWait, AccelFeatureGet, AccelFeatureSet, AccelFeatureVerify, AccelInputWait, Streaming, Complete, Failed };
     Stage stage {ResetSend};
     unsigned elapsed {0}, deadline {1000}, totalTicks {0};
     unsigned client {0}, clientCount {0}, hidAddress {0};
@@ -55,6 +57,13 @@ class IntelISH : public IOService {
     UInt8 alsDevice {0}, feature[512] {}, originalFeature[512] {};
     UInt8 requestData[512] {};
     unsigned requestSize {0}, lightSamples {0};
+    ISHAccel::Layout accel;
+    bool accelFound {false}, accelSetup {false}, accelReady {false};
+    UInt8 accelDevice {0}, accelFeature[512] {};
+    unsigned accelSamples {0}, pollCycle {0};
+    void beginAccel();
+    void requestAccel(UInt8 command, Stage next, const char *name);
+    bool accelInput(UInt8 device, const UInt8 *bytes, unsigned size);
     void beginALS();
     void requestReport(UInt8 command, Stage next, const char *name);
     bool lightInput(UInt8 device, const UInt8 *bytes, unsigned size);
@@ -123,7 +132,7 @@ bool IntelISH::start(IOService *provider) {
     }
     interruptAdded = true;
     savedMask = read(0x08); savedHost = read(0x38); savedDMA = read(0x368);
-    setProperty("PortStage", "ALS feature control and illuminance reports");
+    setProperty("PortStage", "ALS and accelerometer descriptor-driven reports");
     setProperty("BAR0Physical", mapping->getPhysicalAddress(), 64);
     IOLog("IntelISH: 8086:9d35 revision=%02x BAR0=%llx length=%llu PCI command=%04x\n",
           pci->configRead8(kIOPCIConfigRevisionID),
@@ -162,6 +171,8 @@ IOReturn IntelISH::powerAction(OSObject *owner, void *state, void *, void *, voi
     atomic_store_explicit(&self->smcLux, UINT32_MAX, memory_order_release);
     self->setProperty("Suspended", sleep);
     self->setProperty("ALSControlsVerified", false);
+    self->setProperty("AccelControlsVerified", false);
+    self->removeProperty("AccelSample");
     if (sleep) {
         IOLog("IntelISH: PM sleep; stopping polling and mailbox access\n");
         self->timer->cancelTimeout();
@@ -189,6 +200,10 @@ void IntelISH::restartTransport() {
     assembly.used = 0;
     bzero(clientMap, sizeof(clientMap));
     als = ISHALS::Layout{};
+    accel = ISHAccel::Layout{}; accelFound = accelSetup = accelReady = false;
+    accelSamples = pollCycle = 0;
+    setProperty("AccelControlsVerified", false); setProperty("AccelSampleCount", 0ULL, 32);
+    removeProperty("AccelSample"); removeProperty("AccelError");
     removeProperty("TransportError"); removeProperty("ALSInputError");
     setProperty("HIDConnected", false); setProperty("ALSControlsVerified", false);
     removeProperty("ALSMilliLux"); removeProperty("ALSRawIlluminance");
@@ -270,6 +285,7 @@ void IntelISH::advance(Stage next, const char *name, unsigned timeout) {
           name, read(0x34), read(0x48), read(0x54));
 }
 void IntelISH::fail(const char *reason) {
+    accelReady = false; setProperty("AccelControlsVerified", false); removeProperty("AccelSample");
     atomic_store_explicit(&smcLux, UINT32_MAX, memory_order_release);
     IOLog("IntelISH: transport stopped: %s\n", reason);
     setProperty("TransportError", reason);
@@ -470,7 +486,7 @@ void IntelISH::receiveHIDMessage(const UInt8 *bytes, unsigned size) {
     if (length != size - 6) { dump("invalid-HID-length", bytes, size); fail("HID payload length mismatch"); return; }
     // Input publications may arrive asynchronously; discovery does not enable them.
     if (command == 5) {
-        if (!bytes[2]) lightInput(bytes[1], bytes + 6, length);
+        if (!bytes[2]) { lightInput(bytes[1], bytes + 6, length); accelInput(bytes[1], bytes + 6, length); }
         return;
     }
     if (command == 6) {
@@ -487,7 +503,7 @@ void IntelISH::receiveHIDMessage(const UInt8 *bytes, unsigned size) {
             if (itemSize < 6 || itemSize > length - offset ||
                 (ISHProtocol::little16(list + offset + 4) && ISHProtocol::little16(list + offset + 4) != itemSize - 6)) return;
             const UInt8 *item = list + offset;
-            if ((item[0] & 0x7f) == 5 && !item[2]) lightInput(item[1], item + 6, itemSize - 6);
+            if ((item[0] & 0x7f) == 5 && !item[2]) { lightInput(item[1], item + 6, itemSize - 6); accelInput(item[1], item + 6, itemSize - 6); }
             offset += itemSize;
         }
         return;
@@ -500,7 +516,32 @@ void IntelISH::receiveHIDMessage(const UInt8 *bytes, unsigned size) {
         dump("unexpected-HID-response", bytes, size); fail("HID response command/device/status mismatch"); return;
     }
     const UInt8 *payload = bytes + 6;
-    if ((stage == ALSFeatureGet || stage == ALSFeatureVerify) && command == 2) {
+    if ((stage == AccelFeatureGet || stage == AccelFeatureVerify) && command == 2) {
+        if (length != accel.featureBytes || payload[0] != accel.report) { fail("accelerometer feature ID/length mismatch"); return; }
+        setProperty("AccelFeatureCurrent", const_cast<UInt8 *>(payload), length);
+        unsigned power, reporting, interval;
+        if (!ISHALS::extract(payload, length, accel.power, power) ||
+            !ISHALS::extract(payload, length, accel.reporting, reporting) ||
+            !ISHALS::extract(payload, length, accel.interval, interval)) { fail("accelerometer controls unavailable"); return; }
+        setProperty("AccelReportIntervalRaw", interval, 32);
+        if (stage == AccelFeatureGet) {
+            setProperty("AccelFeatureOriginal", const_cast<UInt8 *>(payload), length);
+            bcopy(payload, accelFeature, length);
+            if (!ISHALS::insert(accelFeature, length, accel.power, accel.power.enabledValue) ||
+                !ISHALS::insert(accelFeature, length, accel.reporting, accel.reporting.enabledValue)) { fail("accelerometer controls out of range"); return; }
+            setProperty("AccelFeatureRequested", accelFeature, length);
+            requestAccel(3, AccelFeatureSet, "accel-set-feature");
+        } else {
+            if (power != accel.power.enabledValue || reporting != accel.reporting.enabledValue) { fail("accelerometer feature readback mismatch"); return; }
+            accelReady = true; setProperty("AccelControlsVerified", true);
+            requestAccel(4, AccelInputWait, "accel-get-input");
+        }
+    } else if (stage == AccelFeatureSet && command == 3) {
+        requestAccel(2, AccelFeatureVerify, "accel-feature-readback");
+    } else if (stage == AccelInputWait && command == 4) {
+        if (!accelInput(bytes[1], payload, length)) { fail("accelerometer input did not decode"); return; }
+        advance(Streaming, "ALS-accelerometer-reporting"); timer->setTimeoutMS(100);
+    } else if ((stage == ALSFeatureGet || stage == ALSFeatureVerify) && command == 2) {
         dump("ALS-feature", payload, length);
         if (length != als.featureBytes || payload[0] != als.report) {
             fail("ALS feature report ID/length mismatch"); return;
@@ -536,8 +577,10 @@ void IntelISH::receiveHIDMessage(const UInt8 *bytes, unsigned size) {
         requestReport(2, ALSFeatureVerify, "ALS-feature-readback");
     } else if (stage == ALSInputWait && command == 4) {
         if (!lightInput(bytes[1], payload, length)) { fail("ALS input did not decode"); return; }
-        streamingStarted = true; advance(Streaming, "ALS-reporting");
-        timer->setTimeoutMS(1000);
+        streamingStarted = true;
+        if (accelFound && !accelSetup) { beginAccel(); return; }
+        advance(Streaming, "ALS-accelerometer-reporting");
+        timer->setTimeoutMS(accelReady ? 100 : 1000);
     } else if (stage == HIDEnumWait && command == 33) {
         if (!length || payload[0] > 32 || length != 1 + unsigned(payload[0]) * 9) {
             fail("invalid HID device enumeration"); return;
@@ -579,11 +622,65 @@ void IntelISH::receiveHIDMessage(const UInt8 *bytes, unsigned size) {
                     als.illuminance.bit,als.illuminance.width,als.illuminance.exponent,als.illuminance.unit);
             }
         }
+        if (command == 1 && !accelFound) {
+            ISHAccel::Layout layout;
+            if (ISHAccel::parse(payload, length, layout) && motion::valid(ISHAccel::motionLayout(layout))) {
+                accel = layout; accelDevice = bytes[1]; accelFound = true;
+                setProperty("AccelDeviceID", accelDevice, 8); setProperty("AccelReportID", accel.report, 8);
+                setProperty("AccelInputBytes", accel.inputBytes, 32); setProperty("AccelFeatureBytes", accel.featureBytes, 32);
+                for (unsigned i = 0; i < 3; ++i) {
+                    char key[40], metadata[160];
+                    snprintf(key, sizeof(key), "AccelAxis-%c", 'X' + i);
+                    const auto &f = accel.axes[i];
+                    snprintf(metadata, sizeof(metadata), "bit=%u width=%u min=%lld max=%lld unit=0x%x exponent=%d", f.bit, f.width, f.minimum, f.maximum, f.unit, f.exponent);
+                    setProperty(key, metadata);
+                    IOLog("IntelISH: accel layout device=%u report=%u %c %s\n", accelDevice, accel.report, 'X'+i, metadata);
+                }
+            }
+        }
         if (command == 0) requestHID(1, deviceIDs[deviceIndex], ReportDescriptorWait, "HID-report-descriptor");
         else if (++deviceIndex < deviceCount)
             requestHID(0, deviceIDs[deviceIndex], HIDDescriptorWait, "HID-descriptor");
         else { snapshot(); beginALS(); }
     } else { fail("unexpected HID discovery stage"); }
+}
+void IntelISH::beginAccel() {
+    accelSetup = true;
+    requestAccel(2, AccelFeatureGet, "accel-get-feature");
+}
+void IntelISH::requestAccel(UInt8 command, Stage next, const char *name) {
+    if (requestPending) { fail("overlapping accelerometer request"); return; }
+    pendingCommand = command; pendingDevice = accelDevice;
+    requestSize = command == 3 ? accel.featureBytes : 1;
+    if (command == 3) bcopy(accelFeature, requestData, requestSize);
+    else requestData[0] = static_cast<UInt8>(accel.report);
+    requestPending = true; advance(next, name, 1500); sendHIDRequest();
+}
+bool IntelISH::accelInput(UInt8 device, const UInt8 *bytes, unsigned size) {
+    if (!accelReady || device != accelDevice || !size || bytes[0] != accel.report) return false;
+    uint64_t ticks, ns; clock_get_uptime(&ticks); absolutetime_to_nanoseconds(ticks, &ns);
+    motion::Sample sample;
+    auto result = motion::decode(ISHAccel::motionLayout(accel), bytes, size, ns, sample);
+    if (size != accel.inputBytes || result != motion::Result::OK) {
+        setProperty("AccelError", "input size/ID/axis bounds mismatch"); return false;
+    }
+    auto dict = OSDictionary::withCapacity(7);
+    if (!dict) { setProperty("AccelError", "sample allocation failed"); return false; }
+    auto put = [&](const char *key, uint64_t value) {
+        auto number = OSNumber::withNumber(value, 64);
+        if (number) { dict->setObject(key, number); number->release(); }
+    };
+    put("RawX", static_cast<uint64_t>(sample.axes[0])); put("RawY", static_cast<uint64_t>(sample.axes[1]));
+    put("RawZ", static_cast<uint64_t>(sample.axes[2])); put("TimestampNS", ns); put("Sequence", ++accelSamples);
+    put("DeviceID", accelDevice); put("ReportID", accel.report);
+    setProperty("AccelSample", dict); dict->release();
+    setProperty("AccelInputReport", const_cast<UInt8 *>(bytes), size);
+    setProperty("AccelSampleCount", accelSamples, 32); removeProperty("AccelError");
+    if (accelSamples <= 8 || !(accelSamples % 100))
+        IOLog("IntelISH: accel sample=%u x=%lld y=%lld z=%lld timestamp=%llu\n", accelSamples,
+              static_cast<long long>(sample.axes[0]), static_cast<long long>(sample.axes[1]),
+              static_cast<long long>(sample.axes[2]), ns);
+    return true;
 }
 void IntelISH::beginALS() {
     if (!alsFound) { fail("no supported ALS descriptor found"); return; }
@@ -669,11 +766,13 @@ void IntelISH::tick(OSObject *owner, IOTimerEventSource *source) {
     if (!self || !self->mapping || self->suspended) return;
     if (self->stage == Complete || self->stage == Failed) return;
     if (self->stage == Streaming) {
-        self->requestReport(4, ALSInputWait, "ALS-get-input");
+        if (self->accelReady && (++self->pollCycle % 10))
+            self->requestAccel(4, AccelInputWait, "accel-get-input");
+        else self->requestReport(4, ALSInputWait, "ALS-get-input");
     }
     self->pump();
     if (self->stage == Complete || self->stage == Failed) return;
-    if (self->stage == Streaming) { source->setTimeoutMS(1000); return; }
+    if (self->stage == Streaming) { source->setTimeoutMS(self->accelReady ? 100 : 1000); return; }
     if (++self->elapsed >= self->deadline || (!self->streamingStarted && ++self->totalTicks >= 6000)) {
         self->fail("stage/overall timeout (10 ms timer ticks)"); return;
     }

@@ -28,4 +28,4 @@ Sources and Info.plist live in `IntelISH/` (Acidanthera layout: project at the r
 
 ## Scope
 
-Ambient light and transport recovery are implemented. Motion decoding is separate work; camera capture is handled by a separate project. Development history and test commands are in `AGENTS.md` and the workspace sensor context.
+Ambient light and transport recovery are implemented. Version 0.7.0 adds descriptor-driven accelerometer feature setup and signed X/Y/Z reports in IORegistry (hardware samples and orientation anchors verified). Gyroscope decoding is next; camera capture is handled by a separate project. Development history and test commands are in `AGENTS.md` and the workspace sensor context.
