@@ -1,6 +1,6 @@
 # IntelISH macOS port
 
-Last updated 2026-10-08.
+Last updated 2026-10-09.
 
 Target: HP Elite x2 1012 G2, Intel Sunrise Point-LP ISH PCI `8086:9d35`.
 Linux reference: `../refs/linux-sensors-camera/linux/drivers/hid/intel-ish-hid/`,
@@ -9,6 +9,10 @@ commit a90ee43 (2026-10-04), GPL-2.0-only. Keep upstream reference files untouch
 ## Current stage (2026-10-08)
 
 Branch `motion-sensors`, 0.7.0 adds accelerometer decoding/control to the existing ALS transport. Accelerometer implementation committed on this branch. Captured device0/report7 has signed32 XYZ at report-inclusive bits152/184/216, exponent−6/unit0, input32/feature229 bytes. Feature readback and raw samples/metadata are exposed in IORegistry; gyro and automatic rotation are not enabled. Hardware sample delivery and cardinal orientation anchors verified; `../tools/accel-probe.py` captures all diagnostics while the user follows pose prompts. Full status, exact EFI backups and undo live in `../context/sensors.md`. Project-local SDKs are described in README.md. Host accel/ALS/protocol sanitizer tests and Debug build pass.
+
+## Standalone rotation app (2026-10-09)
+
+Branch standalone-rotation (base main f31fe3d) adds ISHRotation/, a separate app Xcode project; driver source unchanged. Release app build/policy checks pass; app installed and enabled with old YogaSMCNC rotation disabled. Connected hardware round trip works; unplugged late1x fallback observed. App0.1.1 adds bounded HiDPI preservation, build/selection tests pass; unplugged repeated retest passes. Extra blanking/reannounce follow-up and modern login launch pending. Own README documents dependencies, build, diagnostics and release packaging. Full live status/undo in ../context/rotation.md; controls-only YogaSMC worktree in ../context/development.md. App source committed on standalone-rotation; not pushed.
 
 ## Earlier stages (historical)
 
