@@ -14,7 +14,12 @@
 #include "ALSReport.hpp"
 #include "AccelerometerReport.hpp"
 #include <kern/clock.h>
+#include <pexpert/pexpert.h>
 #include "SMCLight.hpp"
+// Per-packet protocol tracing floods the kernel log buffer (tens of thousands of lines per
+// minute); it is off unless the boot-arg -ishtrace is present. Errors and state changes still log.
+static bool gIshTrace = false;
+#define ISH_TRACE(...) do { if (gIshTrace) IOLog(__VA_ARGS__); } while (0)
 bool ADDPR(debugEnabled) = true;
 uint32_t ADDPR(debugPrintDelay) = 0;
 
@@ -107,6 +112,7 @@ OSDefineMetaClassAndStructors(IntelISH, IOService)
 
 bool IntelISH::start(IOService *provider) {
     if (!IOService::start(provider)) return false;
+    { char arg[8]; gIshTrace = PE_parse_boot_argn("-ishtrace", arg, sizeof(arg)); }
     pci = OSDynamicCast(IOPCIDevice, provider);
     if (!pci || pci->configRead16(kIOPCIConfigVendorID) != 0x8086 ||
         pci->configRead16(kIOPCIConfigDeviceID) != 0x9d35) return false;
@@ -281,7 +287,7 @@ void IntelISH::write(UInt32 offset, UInt32 value) {
 void IntelISH::advance(Stage next, const char *name, unsigned timeout) {
     stage = next; elapsed = 0; deadline = timeout;
     setProperty("TransportState", name);
-    IOLog("IntelISH: stage=%s FWSTS=%08x H2I=%08x I2H=%08x\n",
+    ISH_TRACE("IntelISH: stage=%s FWSTS=%08x H2I=%08x I2H=%08x\n",
           name, read(0x34), read(0x48), read(0x54));
 }
 void IntelISH::fail(const char *reason) {
@@ -327,7 +333,7 @@ void IntelISH::nextClient() {
 }
 void IntelISH::receive(UInt32 bell, const UInt8 *bytes, unsigned size) {
     unsigned protocol = (bell >> 10) & 15, command = (bell >> 16) & 15;
-    IOLog("IntelISH: RX doorbell=%08x length=%u\n", bell, size);
+    ISH_TRACE("IntelISH: RX doorbell=%08x length=%u\n", bell, size);
     if (protocol == 3) {
         if (command == 3 || command == 4) {
             if (size != 4) { fail("invalid reset response length"); return; }
@@ -345,7 +351,7 @@ void IntelISH::receive(UInt32 bell, const UInt8 *bytes, unsigned size) {
     if (!ISHProtocol::parse(bytes, size, header)) {
         dump("invalid-ISHTP", bytes, size); fail("invalid ISHTP header/length"); return;
     }
-    IOLog("IntelISH: ISHTP fw=%u host=%u length=%u complete=%u\n",
+    ISH_TRACE("IntelISH: ISHTP fw=%u host=%u length=%u complete=%u\n",
           header.firmware, header.host, header.length, header.complete);
     const UInt8 *payload = bytes + 4;
     unsigned length = header.length;
@@ -383,7 +389,7 @@ void IntelISH::receive(UInt32 bell, const UInt8 *bytes, unsigned size) {
             dump("unexpected-flow-control", bytes, size); return;
         }
         if (txCredits >= 255) { fail("excessive TX flow credits"); return; }
-        ++txCredits; IOLog("IntelISH: HID TX credit=%u\n", txCredits);
+        ++txCredits; ISH_TRACE("IntelISH: HID TX credit=%u\n", txCredits);
         sendHIDRequest(); return;
     }
     if (stage == ConnectWait && payload[0] == 0x86) {
@@ -462,7 +468,7 @@ void IntelISH::sendHIDRequest() {
     // Linux ISH leaves request header.size zero; payload still includes report ID.
     if (requestSize) bcopy(requestData, msg + 6, requestSize);
     --txCredits; requestPending = false;
-    IOLog("IntelISH: HID request command=%u device=%u report=%u bytes=%u\n",
+    ISH_TRACE("IntelISH: HID request command=%u device=%u report=%u bytes=%u\n",
           pendingCommand, pendingDevice, requestSize ? requestData[0] : 0, requestSize);
     sendISHTP(static_cast<UInt8>(hidAddress), 1, msg, 6 + requestSize);
 }
@@ -481,7 +487,7 @@ void IntelISH::receiveHIDMessage(const UInt8 *bytes, unsigned size) {
     if (size < 6) { fail("short HID host-interface header"); return; }
     unsigned length = ISHProtocol::little16(bytes + 4);
     UInt8 command = bytes[0] & 0x7f;
-    IOLog("IntelISH: HID response command=%u response=%u device=%u status=%u flags=%u length=%u assembled=%u\n",
+    ISH_TRACE("IntelISH: HID response command=%u response=%u device=%u status=%u flags=%u length=%u assembled=%u\n",
           command, !!(bytes[0] & 0x80), bytes[1], bytes[2], bytes[3], length, size);
     if (length != size - 6) { dump("invalid-HID-length", bytes, size); fail("HID payload length mismatch"); return; }
     // Input publications may arrive asynchronously; discovery does not enable them.
@@ -747,7 +753,7 @@ void IntelISH::pump() {
         unsigned size = p.doorbell & 0x3ff;
         for (unsigned i = 0; i < (size + 3) / 4; ++i)
             write(0xe0 + i * 4, OSReadLittleInt32(p.bytes, i * 4));
-        IOLog("IntelISH: TX doorbell=%08x length=%u\n", p.doorbell, size);
+        ISH_TRACE("IntelISH: TX doorbell=%08x length=%u\n", p.doorbell, size);
         write(0x48, p.doorbell);
         head = (head + 1) % 8; --queued;
         if (stage == ResetSend) advance(ResetWait, "reset-ack", 1000);
