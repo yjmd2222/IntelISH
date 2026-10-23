@@ -1,6 +1,6 @@
 # IntelISH
 
-macOS driver for the Intel Integrated Sensor Hub on the HP Elite x2 1012 G2 (PCI `8086:9d35`). Reads the ambient light sensor through ISHTP/HID and publishes lux through VirtualSMC for automatic brightness.
+macOS driver for the Intel Integrated Sensor Hub on the HP Elite x2 1012 G2 (PCI `8086:9d35`). It reads the ambient light sensor and publishes lux through VirtualSMC for automatic brightness, and configures the accelerometer and exposes signed X/Y/Z samples and sensor metadata in IORegistry. IntelISH reads the accelerometer; YogaSMC can use those readings to rotate the display. On the HP Elite x2 1012 G2 running Ventura 13.7.8, [FBReannounce](https://github.com/yjmd2222/fbreannounce) is a separate companion kext that helps macOS recognize the built-in display after rotation. Gyroscope decoding is not implemented.
 
 ## Build
 
@@ -28,4 +28,4 @@ Sources and Info.plist live in `IntelISH/` (Acidanthera layout: project at the r
 
 ## Scope
 
-Ambient light and transport recovery are implemented. Version 0.7.0 adds descriptor-driven accelerometer feature setup and signed X/Y/Z reports in IORegistry (hardware samples and orientation anchors verified). Gyroscope decoding is next; camera capture is handled by a separate project. Development history and test commands are in `AGENTS.md` and the workspace sensor context.
+Ambient light, transport recovery, and descriptor-driven accelerometer setup/reporting are implemented. Hardware accelerometer samples and orientation anchors have been verified. Camera capture is handled by a separate project. Development history and test commands are in `AGENTS.md` and the workspace sensor context.
