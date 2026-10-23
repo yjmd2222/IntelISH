@@ -29,3 +29,9 @@ Sources and Info.plist live in `IntelISH/` (Acidanthera layout: project at the r
 ## Scope
 
 Ambient light and transport recovery are implemented. Version 0.7.0 adds descriptor-driven accelerometer feature setup and signed X/Y/Z reports in IORegistry (hardware samples and orientation anchors verified). Gyroscope decoding is next; camera capture is handled by a separate project. Development history and test commands are in `AGENTS.md` and the workspace sensor context.
+
+## Optional display rotation app
+
+[IntelISHRotation](IntelISHRotation/README.md) is a separate Xcode app project in this repository. It reads accelerometer samples directly, offers Auto-Rotate/Rotation Lock and modern login startup, and requires FBReannounce0.2.3 plus the pinned patched Lilu runtime. YogaSMC is not required. Connected and unplugged portrait HiDPI have passed command-driven tests, including unplugged reboot persistence. IntelISH-only users do not need the app. Rotation bundles can be assembled using the documented packaging script; this does not publish a release.
+
+[RotationDebug](RotationDebug/README.md) is the development-only command-driven rotation tool. It is built separately and is not included in release packages.

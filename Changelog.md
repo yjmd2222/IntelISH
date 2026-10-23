@@ -1,6 +1,9 @@
 IntelISH Changelog
 ==================
 
+#### v0.7.1
+- Per-packet protocol tracing (RX/TX doorbell, ISHTP, HID request/response, TX credit, stage) now logs only with boot-arg `-ishtrace`; it filled the 10 MB kernel message buffer within minutes. Errors, state changes and samples still log.
+
 #### v0.7.0
 - Added accelerometer descriptor parsing, feature readback and raw signed XYZ samples
 - Shared serialized transport polling with ALS; sensor metadata and timestamps in IORegistry
